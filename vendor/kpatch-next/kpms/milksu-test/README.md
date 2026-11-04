@@ -40,7 +40,8 @@ loader policy. Acceptance therefore expects `ok=false`, `reboot_required`,
 `loaded=true`, `pending_unload=true`, and the stored `.kpm` remaining present.
 An init-error or exit-error fixture must also remain stored/resident. The
 runner does not reboot, remove the integration, or delete registrations; the
-main agent owns cleanup after reboot.
+test operator must reboot, confirm that the fixtures are no longer loaded,
+and remove their registrations.
 
 Example after kernel integration and a matching MilkSU ksud are installed:
 

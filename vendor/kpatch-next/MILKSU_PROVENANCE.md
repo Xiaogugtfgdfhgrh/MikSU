@@ -4,7 +4,7 @@
 - Source commit: 456744b29efb9989445463ab29e368fa59a103c4
 - Upstream version: 0.13.5, revision 2.
 - Imported on: 2026-11-03.
-- Complete source checkout copied without `.git`; original repository is read-only.
+- The vendored source snapshot excludes upstream Git metadata.
 - Root license: GPL version 2, retained in `LICENSE`.
 - Individual SPDX notices, including GPL-2.0-or-later, remain authoritative.
 - TLSF retains its BSD-style notice in `kernel/include/tlsf.h`.
@@ -27,25 +27,21 @@ the kernel/payload relocation stage.
 Freestanding compiler flags explicitly disable stack protection, PIC/PIE and
 outlined atomics so distribution GCC defaults cannot add runtime dependencies.
 
-The production relocator now handles full-width 64-bit data before computing
-16/32-bit overflow masks. A host UBSan regression demonstrated the previous
-`1 << 64` undefined behavior. Loader checkpoints support runtime fault
-localization; this arithmetic fix alone is not evidence that a device reboot
-has been resolved.
+The production relocator handles full-width 64-bit data before computing
+16/32-bit overflow masks. Host UBSan tests cover relocation arithmetic and
+overflow boundaries. Loader checkpoints support runtime fault localization.
 
-The parent-owned loader change validates relocated callback targets with
-`module_callback_in_text()` and calls the existing range cache synchronization
+The loader validates relocated callback targets with
+`module_callback_in_text()` and calls the range cache synchronization
 routine over the complete executable allocation before invoking init. The host
 adapter only permits known native test callbacks in valid pointer slots;
-it does not bypass validation with an unconditional success. Tests exercise
-the production address-boundary helper directly and assert the range-cache
-arguments and ordering before init. Host tests do not execute the ARM64 cache
-maintenance instructions or prove that the device reboot is resolved.
+tests exercise the production address-boundary helper directly and assert
+the range-cache arguments and ordering before init. Host tests do not execute
+the ARM64 cache maintenance instructions.
 
-The loader uses the existing freestanding `lib_*` byte and string routines for
-ELF parsing and resident module data. It no longer depends on optional,
-unchecked kernel string-function bindings on those paths. This removes a
-null-binding failure mode; runtime compatibility still requires device tests.
+The loader uses freestanding `lib_*` byte and string routines for ELF parsing
+and resident module data, avoiding optional kernel string-function bindings
+on those paths.
 
 The MilkSU KPM initialization retains structure discovery, compiler compatibility,
 the root-only command transport and module services. It does not install

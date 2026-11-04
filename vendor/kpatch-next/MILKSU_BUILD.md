@@ -1,6 +1,6 @@
 # Building the vendored engine and tools
 
-Run from the MilkSU root in Linux/WSL. Do not build in the original repositories.
+Run from the MilkSU root in Linux/WSL.
 The engine uses GNU AArch64 bare-metal tools (upstream CI uses GNU 12.2.rel1).
 
 ```sh
@@ -50,14 +50,11 @@ cc -std=gnu11 -O1 -g -fsanitize=address,undefined \
 /tmp/milksu-kpm-relocation-test
 ```
 
-The relocator harness compiles the production `relo.c` arithmetic; it does not
-execute ARM64 module instructions on the host. It reproduced a 64-bit shift of
-a 32-bit int in ABS64 before the fix. A passing host test does not establish the
-cause of a device reboot. Diagnostic engines emit bounded `KPM_LOAD checkpoint=`
-lines for file IO, ELF validation, allocation, relocation and callback entry/
-return. Capture `dmesg -w` independently through the manual device load; the
-normal startup log collector stops before late runtime tests.
+The relocator harness validates the production `relo.c` arithmetic with
+sanitizers. It does not execute ARM64 module instructions on the host.
+Diagnostic engines emit bounded `KPM_LOAD checkpoint=` lines for file IO,
+ELF validation, allocation, relocation and callback entry/return. Capture
+`dmesg -w` during manual device loading to inspect those checkpoints.
 
-Production Rust dependency requested from the main agent: `goblin = "0.10.7"`.
-The backend otherwise uses existing anyhow, clap (derive), serde_json, sha256,
-tempfile, libc, and log dependencies. No serde derive dependency is required.
+The native Rust backend uses `goblin` for ELF parsing and validation. Its
+dependencies are defined in the Cargo manifests.

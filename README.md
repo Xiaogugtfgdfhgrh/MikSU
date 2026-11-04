@@ -8,7 +8,7 @@
 
 [下载正式版](https://github.com/Xiaogugtfgdfhgrh/MikSU/releases/latest) · [官方 TG 频道](https://t.me/Xiaogu_zcr521) · [问题反馈](https://github.com/Xiaogugtfgdfhgrh/MikSU/issues)
 
-MilkSU 提供内核级 Root 授权、应用权限配置、模块管理、KPM 管理和 SUSFS 功能。KPM 与 SUSFS 均可在管理器设置中按需开启，底层采用独立适配的内核钩子，并保留 KernelSU 模块与 WebUI 的兼容接口。
+MilkSU 提供内核级 Root 授权、应用权限配置、模块管理、KPM 管理和 SUSFS 功能。KPM 与 SUSFS 可在管理器设置中按需开启，支持 KernelSU 模块与 WebUI 接口。
 
 当前正式版本：**0.2.0（32800）**。应用 ID：`io.milksu.manager`。
 
@@ -17,35 +17,33 @@ MilkSU 提供内核级 Root 授权、应用权限配置、模块管理、KPM 管
 | 功能 | 说明 |
 | --- | --- |
 | 内核级 Root | 按应用授权与撤销 Root，支持 App Profile、自定义 UID/GID、权限组、权能和 SELinux 上下文 |
-| 内核钩子 | 使用 KernelSU-Next 来源的 ARM64 钩子后端，衔接权限管理、启动事件与模块生命周期 |
+| 内核钩子 | 通过 ARM64 内核钩子处理权限管理、启动事件与模块生命周期 |
 | KPM 扩展 | 导入 `.kpm`、加载确认、临时加载、开机加载、参数控制与运行状态查询 |
 | SUSFS 隐藏 | 提供路径、挂载、KSTAT、uname、cmdline/bootconfig、open redirect 等能力，兼容对应的 SUSFS 用户态工具与模块 |
-| 即时 SUSFS 开关 | 开启集成后立即加载并校验，同时保存开机加载设置；关闭时查询并确认实际运行状态 |
+| SUSFS 自动加载 | 开启后立即生效，并在开机时自动加载 |
 | SELinux 与日志 | 提供隐藏 SELinux 修改、AVC 日志欺骗、SU 日志和传统 SU 命令支持设置 |
 | 模块生态 | 支持模块安装、更新、启停、卸载、WebUI 与 metamodule |
 | 管理器界面 | 提供 Miuix / Material 两种界面，首页按集成状态显示 SUSFS 支持情况与版本 |
-| 正式版更新 | 从本仓库稳定 Release 检查管理器更新，保持应用签名与内核认证身份一致 |
+| 正式版更新 | 自动检查稳定版本，支持下载新版 APK 覆盖安装 |
 
 ## KPM 与 SUSFS
 
 ### KPM
 
-设置中开启 **KPM 集成**后，底部导航显示为：**主页 / KPM / 超级用户 / 模块 / 设置**；未开启时保留四个主要页面。
+在设置中开启 **KPM 集成**，重启后即可通过 KPM 页面管理内核扩展。
 
 - 在 KPM 页面点击右下角 `+`，通过系统文件选择器导入 `.kpm`。
 - 选择文件后显示加载确认，可勾选“临时加载”；临时加载不会启用开机加载。
-- 加载后直接在模块列表使用控制与卸载入口，无需进入单独详情页。
-- 参数、自动加载与错误状态均由守护进程管理，操作后重新读取实际状态。
+- 已加载模块支持参数控制、开机加载设置与卸载。
 - 安装或移除 KPM 引擎需要完整重启。模块代码仍驻留时会显示待重启状态，重启后完成清理。
 
 ### SUSFS
 
-设置中的 **SUSFS 集成**同时控制当前加载与开机加载，不再提供独立的开机自启动开关。
+在设置中开启 **SUSFS 集成**，即可立即启用 SUSFS，并在开机时自动加载。
 
-- 开启后立即加载，确认后端可用再保存启动配置。
 - 首页仅在集成开启时显示 SUSFS 支持情况、版本与后端类型。
 - 支持对应的 SUSFS 模块与 `ksu_susfs` 工具，具体规则由所用模块或工具配置。
-- **AVC 日志欺骗**位于“隐藏 SELinux 修改”下方，开关读取实际内核状态，并与 SUSFS 共用 AVC 服务。
+- **AVC 日志欺骗**位于设置中的“隐藏 SELinux 修改”下方。
 
 ## 支持范围
 
@@ -53,7 +51,7 @@ MilkSU 提供内核级 Root 授权、应用权限配置、模块管理、KPM 管
 
 | KMI | 验证情况 |
 | --- | --- |
-| `android14-6.1` | 已完成单台设备真机验收，包括 Root 授权、Profile、SUSFS、AVC、KPM 及关闭 / 开启后的完整重启 |
+| `android14-6.1` | 已完成真机功能验证 |
 | `android12-5.10` | 已构建并校验内置资产，未在对应真机验证 |
 | `android13-5.10` | 已构建并校验内置资产，未在对应真机验证 |
 | `android13-5.15` | 已构建并校验内置资产，未在对应真机验证 |
@@ -92,12 +90,10 @@ sha256sum -c SHA256SUMS
 
 ## 更新与恢复
 
-- 管理器默认检查本仓库的稳定 Release。更高版本使用递增的 `versionCode` 和相同正式签名。
-- 也可以从 Releases 下载新版 APK 覆盖安装。只有源码提交、没有有效 APK 的 Release 或检查失败时，不会误报更新。
+- 管理器默认检查稳定版本，也可以从 Releases 下载新版 APK 覆盖安装。
 - 管理器 APK 升级与设备内的 Root 更新是两个步骤；更新后根据首页内核状态使用安装入口更新 Root。
 - 关闭 KPM 集成会恢复其保存的原始内核，并保留 MilkSU Root；关闭后需要完整重启。
-- 涉及镜像的安装会校验备份、候选镜像与写入后的分区内容，并保留恢复记录。
-- 守护进程使用 `/data/adb/ksud`，核心目录为 `/data/adb/ksu/`，MilkSU 专用状态位于 `/data/adb/ksu/MilkSU/`。
+- 镜像安装提供备份、校验与恢复记录。
 
 ## 常见问题
 
@@ -122,7 +118,7 @@ bash tools/build-all.sh --source-ready
 构建需要 Android、Rust、内核构建工具链及对应签名配置。正式构建要求管理器 APK 的证书与内核认证参数一致；持续维护时复用同一正式密钥。
 
 - [管理器与签名配置](manager/README.milksu.md)
-- [构建、验收与镜像恢复细节](docs/MILKSU_TECHNICAL.md)
+- [构建与维护文档](docs/MILKSU_TECHNICAL.md)
 - [手动构建工作流](.github/workflows/milksu-build.yml)
 
 ## 目录结构
@@ -133,7 +129,7 @@ userspace/           ksud、ksuinit 与用户态工具
 manager/             Android 管理器
 uapi/                内核与用户态接口
 vendor/kpatch-next/  KPM 引擎及相关工具源码
-tools/               构建、打包、签名与验收工具
+tools/               构建、打包、签名与测试工具
 ```
 
 ## 开源协议

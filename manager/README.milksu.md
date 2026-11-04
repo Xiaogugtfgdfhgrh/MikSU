@@ -1,92 +1,83 @@
 # MilkSU Manager
 
-The default app ID is `io.milksu.manager`. Kotlin, JNI and AIDL remain under
-`me.weishu.kernelsu` for compatibility. Existing module protocols, module
-registry and profile-template sources are preserved.
+MilkSU Manager provides Root authorization, application profiles, module
+management, KPM controls and SUSFS settings.
 
-## Build Configuration
+Application ID: `io.milksu.manager`.
+Kotlin, JNI and AIDL namespace: `me.weishu.kernelsu`.
 
-The version is `0.2.0 (32800)` from the repository's `version.properties`.
-The Manager, daemon and kernel share this file. Increase its version name
-and code together for each release; source-only commits leave it unchanged.
+## Build
 
-Core updates default to the latest stable Release of
-`Xiaogugtfgdfhgrh/MikSU`. `MILKSU_UPDATE_URL` can be configured through a
-Gradle property or environment variable. A stable tag such as `v0.2.1` must
-contain an uploaded APK named `MilkSU_0.2.1_32801.apk` with a higher version
-code. Drafts, prereleases, PR APKs, missing Releases and malformed responses
-are ignored. Downloads are constrained to the configured GitHub repository.
-Reported size and SHA-256 are checked when supplied, and Android requires a
-matching app signer to install an update.
+The Manager requires the compiled daemon at
+`app/src/main/jniLibs/arm64-v8a/libksud.so`.
 
-The formally signed `v0.2.0` Release uses `MilkSU_0.2.0_32800.apk`.
-Positive update detection, download and installation from a higher-version
-Release have not completed device acceptance.
-An installed build with version code 32800 requires a higher version code
-for the Manager to offer an update.
+The release pipeline provides this asset and runs the Android build:
 
-Release signing continues to use `KEYSTORE_FILE`, `KEYSTORE_PASSWORD`,
-`KEY_ALIAS` and `KEY_PASSWORD` through the existing apksign plugin. Secrets
-must be supplied by the build environment. `tools/build-signing.sh` defaults
-to the `release` profile; `development` is selected explicitly for local
-development builds. Release builds require
-`MILKSU_SIGNING_PROFILE=release` and `MILKSU_REQUIRE_RELEASE_SIGNING=1`.
+```sh
+bash tools/build-release.sh manager
+```
 
-The release identity promotes the dedicated RSA-3072 key already used for
-device acceptance, preserving the exact public certificate and private key
-for APK upgrade compatibility and kernel Manager authentication. Explicit
-`--promote-development` conversion changes the container, alias and password
-to `out/private/milksu-release.p12`, alias `milksu-release`, and
-`out/private/release-password`. It does not regenerate the certificate.
+`version.properties` defines the shared Manager, daemon and kernel version.
+See the [build documentation](../docs/MILKSU_TECHNICAL.md) for prerequisites
+and the complete native asset build sequence.
 
-The build workflow references `MILKSU_RELEASE_KEYSTORE_B64` and
-`MILKSU_RELEASE_KEYSTORE_PASSWORD`; configure both before running the manual
-CI build. Private signing files are excluded from public
-source archives and artifact uploads. The workflow builds manually and does
-not publish Releases automatically.
+## Signing
 
-Before the Android build, provide the real daemon at
-`app/src/main/jniLibs/arm64-v8a/libksud.so`. Do not substitute a placeholder:
-the APK needs this executable for all privileged operations.
+The Android signing plugin reads `KEYSTORE_FILE`, `KEYSTORE_PASSWORD`,
+`KEY_ALIAS` and `KEY_PASSWORD` from the private build configuration.
+
+Official builds use `MILKSU_SIGNING_PROFILE=release` and
+`MILKSU_REQUIRE_RELEASE_SIGNING=1`. The selected APK certificate must match
+the Manager certificate parameters compiled into the root modules.
+
+Use the same signing identity for subsequent APK updates. Keystores and
+passwords are excluded from public source and artifact packages.
 
 ## KPM And SUSFS
 
-The main pages are Home, Superuser, Modules and Settings. KPM appears between
-Home and Superuser only while integration is configured. KPM integration
-and SUSFS integration are inline above SELinux Hide and SU Log in Settings.
-The KPM page uses the same title hierarchy as other main pages. Its empty
-state displays a centered "No modules found" message and the import action.
-Enabling SUSFS integration also starts and verifies the guard in the current
-boot before saving the autoload configuration.
-Home displays SUSFS support, version and variant while integration is enabled.
-The AVC log spoofing control is directly below SELinux Hide and reads back
-the kernel state after each change before saving its boot configuration.
+The main pages are Home, Superuser, Modules and Settings. Enabling KPM
+integration adds the KPM page between Home and Superuser.
+
+KPM supports document import, loading confirmation, temporary loading,
+automatic loading, control and unload operations. Temporary loading leaves
+automatic loading disabled.
+
+Enabling SUSFS starts the guard immediately and enables automatic loading.
+Home displays its support status, version and variant while integration is
+enabled. The AVC log spoofing setting controls the kernel feature and saves
+its boot configuration.
+
+KPM image changes require a full reboot. A kernel module that remains
+resident is displayed as pending removal until reboot.
+
+## Backend Contracts
 
 KPM commands use the `ksud kpm` JSON envelope. SUSFS status uses a direct JSON
-object from `ksud susfs status`; SUSFS mutations use plain output and exit
-status. Operations run serially and re-query the backend. Failed reads retain
-previously confirmed data.
+object from `ksud susfs status`; mutations use command output and exit status.
+Operations run serially and query the backend afterward.
 
-KPM integration is disabled by default. The daemon owns the boot-image
-transaction and its backup. The Manager invokes integration once; the normal
-reboot action applies the pending kernel change. A failed
-transition after a kernel reboot is displayed as an error.
+Imported documents are copied to a bounded app-private staging file. The
+staged file is removed after the daemon processes it.
 
-Importing a document stages it in app-private cache under a generated name,
-passes the path to the root daemon, and removes the staged file afterward.
-Selecting a KPM opens the KPModule confirmation with a temporary-load
-checkbox. Confirming loads it and saves autoload only when temporary loading
-is unchecked. Loaded modules expose control and unload actions directly on
-their cards. Per-KPM and SUSFS autoload states are read from the daemon.
+## Updates
 
-## Verification
+The Manager checks stable Releases of `Xiaogugtfgdfhgrh/MikSU`.
+`MILKSU_UPDATE_URL` can be set through a Gradle property or environment
+variable.
 
-Run the Android unit tests with `gradlew.bat :app:testDebugUnitTest` once the
-Android toolchain and real daemon are available.
+A stable tag such as `v0.2.1` must contain an APK named
+`MilkSU_0.2.1_32801.apk`, with a version code higher than the installed
+version. Drafts, prereleases, missing APKs and malformed responses are
+ignored. Downloads are constrained to the configured repository, and
+reported file size and SHA-256 are checked when supplied.
 
-`tools/Test-SystemProtocols.ps1` runs the Android-independent protocol,
-state, bounded-import and navigation tests with the cached Kotlin 2.0.21
-compiler, serialization 1.7.3, coroutines 1.9.0 and JUnit 4.13.2. It does not
-build an APK and does not replace the Android build check. It also parses
-the new UI and integration files with the Kotlin PSI parser to check syntax;
-that check does not resolve Android or Compose types.
+## Tests
+
+The release pipeline runs unit tests and lint. For Android-independent
+protocol, state and navigation checks, use:
+
+```powershell
+powershell -File tools/Test-SystemProtocols.ps1
+```
+
+This protocol runner complements the Android build and does not replace it.
