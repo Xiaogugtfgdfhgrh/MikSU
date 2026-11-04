@@ -74,4 +74,22 @@ class HomeStartupStateTest {
         assertTrue(startup.awaitingContent(cachedKpm, MainTab.KPM.name))
         assertFalse(startup.awaitingContent(cachedKpm.copy(hasRead = true), MainTab.KPM.name))
     }
+
+    @Test fun metadataCacheRestoresBeforeContentWithoutWaitingForAHomeObserver() {
+        val startup = HomeStartupState(cachedSusfsEnabled = true)
+        val info = SusfsHomeCache(
+            available = true, version = "v2.3.0", variant = "GKI-LKM", builtin = false,
+        ).restore(integrationEnabled = true)
+        assertFalse(startup.awaitingContent(cachedKpm, home))
+        assertEquals(SusfsAvailability.Available, info.availability)
+        assertEquals(info, info.merge(SusfsHomeSnapshot.from(cachedKpm)))
+    }
+
+    @Test fun missingMetadataNeverKeepsTheStartupGateClosedAfterAReadCompletes() {
+        val startup = HomeStartupState().completeSusfsQuery(true)
+        val info = SusfsHomeCache().restore(integrationEnabled = true)
+        assertFalse(startup.awaitingContent(cachedKpm, home))
+        assertEquals(SusfsAvailability.Unknown, info.availability)
+        assertNotEquals(SusfsAvailability.Unavailable, info.availability)
+    }
 }

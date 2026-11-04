@@ -4,6 +4,7 @@ import me.weishu.kernelsu.data.system.BackendException
 import me.weishu.kernelsu.data.system.KpmModule
 import me.weishu.kernelsu.data.system.KpmReport
 import me.weishu.kernelsu.data.system.KpmStatus
+import me.weishu.kernelsu.data.system.KPM_VERIFICATION_TTL_NANOS
 import me.weishu.kernelsu.data.system.SusfsStatus
 import me.weishu.kernelsu.data.system.integrationState
 
@@ -17,6 +18,7 @@ data class SusfsState(
     val reason: String? = null,
     val error: BackendException? = null,
     val queryError: BackendException? = null,
+    val variant: String? = null,
 ) {
     fun merge(status: SusfsStatus) = copy(
         supported = status.supported,
@@ -24,6 +26,7 @@ data class SusfsState(
         builtin = status.builtin,
         autoload = status.autoload,
         version = status.version.orEmpty(),
+        variant = status.variant,
         kmi = status.kmi.orEmpty(),
         reason = status.reason,
         error = null,
@@ -51,15 +54,19 @@ data class KpmUiState(
     val navigationReady: Boolean = false,
     val pendingImport: KpmModule? = null,
     val pendingImportIsNew: Boolean = false,
+    val integrationVerification: KpmStatus? = null,
+    val integrationVerificationError: BackendException? = null,
+    val integrationVerificationCompletedAtNanos: Long? = null,
 ) {
     val integration get() = integrationState(status, unavailable, error)
     val canMutate get() = !busy && unavailable == null && hasRead && hasFreshStatus && status != null && error == null
     val canImport get() = canMutate
     val showImport get() = unavailable == null && hasRead && status != null
     val canLoad get() = canImport && !safeMode && status?.let {
-        it.active && it.configuredEnabled && it.supported && !it.rebootRequired && !it.transitionFailed
+        it.stateKnown && it.active && it.configuredEnabled && it.supported && !it.rebootRequired && !it.transitionFailed
     } == true
-    private val hasIntegrationAccess get() = !busy && unavailable == null && hasFreshIntegrationStatus &&
+    private val hasIntegrationAccess get() = !busy && unavailable == null &&
+        (if (status?.integrationVerified == false) hasFreshStatus else hasFreshIntegrationStatus) &&
         canPatchBoot && status?.stateKnown == true
     val canChangeIntegration get() = status?.let { canSetIntegration(!it.configuredEnabled) } == true
     val requiresReboot get() = status?.let {
@@ -75,10 +82,35 @@ data class KpmUiState(
         (susfs.loaded == true && susfs.builtin != true)
     val canChangeSusfsIntegration get() = canChangeSusfsAutoload ||
         (hasKnownSusfsState && susfs.loaded == true && susfs.builtin != true)
-    val canUpgradeIntegration get() = status?.configuredEnabled == true && canSetIntegration(true)
+    private val matchingIntegrationVerification get() = integrationVerification?.takeIf {
+        status?.integrationVerified == false && hasFreshStatus && error == null &&
+            it.integrationVerified && it.stateKnown &&
+            status.sameIntegrationState(it)
+    }
+    private val verificationIsCurrent get() = integrationVerificationCompletedAtNanos?.let {
+        System.nanoTime() - it in 0L until KPM_VERIFICATION_TTL_NANOS
+    } == true
+    private val settingsIntegrationStatus get() = when {
+        status?.integrationVerified == true -> status
+        integrationVerificationError != null -> null
+        matchingIntegrationVerification != null ->
+            matchingIntegrationVerification.takeIf { verificationIsCurrent }
+        else -> status
+    }
+    val integrationSettingsError get() = integrationVerificationError?.message ?:
+        matchingIntegrationVerification?.takeIf { verificationIsCurrent }?.let {
+            val enabling = !it.configuredEnabled || it.upgradeAvailable
+            if ((if (enabling) it.canEnable else it.canDisable) != true) it.reason else null
+        }
+    val showUpgradeIntegration get() =
+        (settingsIntegrationStatus ?: status)?.let { it.configuredEnabled && it.upgradeAvailable } == true
+    val canUpgradeIntegration get() = showUpgradeIntegration && canSetIntegration(true)
 
-    fun canSetIntegration(enabled: Boolean) = hasIntegrationAccess && status?.let {
-        ((if (enabled) it.canEnable else it.canDisable) ?: it.canConfigure ?: it.supported) &&
+    fun canSetIntegration(enabled: Boolean) = hasIntegrationAccess && settingsIntegrationStatus?.let {
+        ((if (enabled) it.canEnable else it.canDisable) ?:
+            if (status?.integrationVerified == true && it.integrationVerified) {
+                it.canConfigure ?: it.supported
+            } else false) &&
             (it.configuredEnabled != enabled || (enabled && it.upgradeAvailable))
     } == true &&
         (!safeMode || !enabled)
@@ -87,9 +119,12 @@ data class KpmUiState(
         it.sha256.isNotBlank() && (!safeMode || it.autoload) && (!it.pendingUnload || it.autoload)
     } == true
 
-    fun canUnload(module: KpmModule?) = canMutate && module?.let { it.loaded && !it.pendingUnload } == true
+    fun canUnload(module: KpmModule?) = canMutate && status?.canUnload == true &&
+        module?.let { it.loaded && !it.pendingUnload } == true
 
-    fun canRemove(module: KpmModule?) = canMutate && module?.let { !it.loaded && !it.pendingUnload } == true
+    fun canRemove(module: KpmModule?) = canMutate && module?.let {
+        !it.pendingUnload && (!it.loaded || status?.canUnload == true)
+    } == true
 
     fun withAccess(unavailable: String?, canPatchBoot: Boolean, safeMode: Boolean) = copy(
         unavailable = unavailable,
@@ -97,15 +132,54 @@ data class KpmUiState(
         safeMode = safeMode,
         hasFreshStatus = hasFreshStatus && unavailable == null,
         hasFreshIntegrationStatus = hasFreshIntegrationStatus && unavailable == null,
+        integrationVerification = integrationVerification.takeIf { unavailable == null },
         susfs = if (unavailable == null) susfs else susfs.queryFailed(
             BackendException("root_unavailable", unavailable)
         ),
     )
 
+    fun mergeIntegrationVerification(report: KpmReport, nowNanos: Long = System.nanoTime()): KpmUiState {
+        val checked = report.status
+        if (checked != null && (!checked.integrationVerified || !checked.stateKnown ||
+                (status != null && !status.sameIntegrationState(checked)))
+        ) return this
+        return copy(
+            integrationVerification = checked,
+            integrationVerificationError = report.error,
+            integrationVerificationCompletedAtNanos = report.verificationCompletedAtNanos ?: nowNanos,
+        )
+    }
+
     fun merge(report: KpmReport, detailId: String? = null): KpmUiState {
         val freshSnapshot = report.status != null && report.modules != null && report.error == null
+        val incoming = report.status
+        val keepIntegration = incoming?.integrationVerified == false && hasFreshIntegrationStatus &&
+            status?.let { incoming.sameIntegrationState(it) } == true
+        val keepVerification = incoming != null && status?.let {
+            incoming.sameIntegrationState(it) && incoming.upgradeAvailable == it.upgradeAvailable
+        } == true
         return copy(
-            status = report.status ?: status,
+            status = incoming ?: status,
+            integrationVerification = when {
+                incoming?.integrationVerified == true && incoming.stateKnown -> incoming
+                incoming != null -> integrationVerification?.takeIf {
+                    keepVerification && incoming.sameIntegrationState(it)
+                }
+                report.statusQueried -> null
+                else -> integrationVerification
+            },
+            integrationVerificationCompletedAtNanos = when {
+                incoming?.integrationVerified == true && incoming.stateKnown ->
+                    report.verificationCompletedAtNanos ?: System.nanoTime()
+                incoming != null && !keepVerification -> null
+                report.statusQueried && incoming == null -> null
+                else -> integrationVerificationCompletedAtNanos
+            },
+            integrationVerificationError = when {
+                incoming?.integrationVerified == true -> null
+                incoming != null && !keepVerification -> null
+                else -> integrationVerificationError
+            },
             kpmTabEnabled = report.status?.takeIf { it.stateKnown }?.configuredEnabled ?: kpmTabEnabled,
             navigationReady = report.status?.stateKnown == true || navigationReady,
             modules = report.modules ?: modules,
@@ -118,7 +192,7 @@ data class KpmUiState(
                 else -> hasFreshStatus
             },
             hasFreshIntegrationStatus = when {
-                report.status != null -> true
+                incoming != null -> incoming.integrationVerified || keepIntegration
                 report.statusQueried -> false
                 else -> hasFreshIntegrationStatus
             },

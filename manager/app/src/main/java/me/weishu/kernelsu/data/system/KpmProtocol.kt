@@ -41,7 +41,16 @@ data class KpmStatus(
     @SerialName("upgrade_available") val upgradeAvailable: Boolean = false,
     @SerialName("can_enable") val canEnable: Boolean? = null,
     @SerialName("can_disable") val canDisable: Boolean? = null,
-)
+    @SerialName("integration_verified") val integrationVerified: Boolean = true,
+    @SerialName("can_unload") val canUnload: Boolean = false,
+    @SerialName("engine_sha256") val engineSha256: String? = null,
+) {
+    fun sameIntegrationState(other: KpmStatus): Boolean =
+        stateKnown && other.stateKnown &&
+            configuredEnabled == other.configuredEnabled && active == other.active &&
+            rebootRequired == other.rebootRequired && transitionFailed == other.transitionFailed &&
+            supported == other.supported && version == other.version && engineSha256 == other.engineSha256
+}
 
 @Serializable
 data class KpmModule(

@@ -12,7 +12,7 @@ static long test_init(const char *args, const char *event, void *reserved)
 {
     init_calls++;
     assert(get_module_nums() == -EBUSY);
-    assert(cache_sync_calls == 1);
+    assert(cache_sync_calls == (unsigned int)init_calls);
     assert(cache_sync_start == (unsigned long)last_exec_allocation);
     assert(cache_sync_end - cache_sync_start == last_exec_allocation_size);
     return init_result;
@@ -276,8 +276,9 @@ static void input_snapshot_ownership_test(void)
     assert(strstr(output, "description=Loader test\n"));
     assert(module_control0("host-fixture", "still-live", output, sizeof(output)) == 0);
     assert(!strcmp(output, "still-live"));
-    assert(unload_module("host-fixture", NULL) == -EINPROGRESS);
-    assert(init_calls == 1 && exit_calls == 1 && exec_frees == 0);
+    assert(unload_module("host-fixture", NULL) == 0);
+    assert(init_calls == 1 && exit_calls == 1 && exec_frees == 1);
+    assert(get_module_nums() == 0);
 }
 
 static void failed_init_snapshot_ownership_test(void)
@@ -286,6 +287,7 @@ static void failed_init_snapshot_ownership_test(void)
     void *snapshot = fixture(1, &length);
     char args[] = "retained-on-init-error";
     init_result = -EINVAL;
+    exit_result = -EIO;
     assert(load_module(snapshot, length, args, "load-file", NULL) == -EINVAL);
     memset(snapshot, 0xa5, (size_t)length);
     free(snapshot);
@@ -295,7 +297,7 @@ static void failed_init_snapshot_ownership_test(void)
     char output[4096];
     assert(get_module_info("host-fixture", output, sizeof(output)) > 0);
     assert(strstr(output, "state=failed\n") && strstr(output, "pending_unload=1\n"));
-    assert(strstr(output, "last_error=-22\n"));
+    assert(strstr(output, "last_error=-5\n"));
     assert(init_calls == 1 && exit_calls == 1 && exec_frees == 0);
     assert(get_module_nums() == 1 && cache_sync_calls == 1);
 }
@@ -313,11 +315,15 @@ static void no_control_and_resident_exit_test(void)
     assert(get_module_info("host-fixture", output, sizeof(output)) > 0);
     assert(strstr(output, "has_control=0\n"));
     assert(strstr(output, "args_hex=6c696e65310a6e616d653d73706f6f66\n"));
-    assert(unload_module("host-fixture", 0) == -EINPROGRESS);
-    assert(unload_module("host-fixture", 0) == -EINPROGRESS);
-    assert(exit_calls == 1 && exec_frees == 0 && get_module_nums() == 1);
-    assert(get_module_info("host-fixture", output, sizeof(output)) > 0);
-    assert(strstr(output, "pending_unload=1\n"));
+    assert(unload_module("host-fixture", 0) == 0);
+    assert(unload_module("host-fixture", 0) == -ENOENT);
+    assert(exit_calls == 1 && exec_frees == 1 && get_module_nums() == 0);
+    assert(get_module_info("host-fixture", output, sizeof(output)) == -ENOENT);
+    bytes = fixture(0, &length);
+    assert(load_module(bytes, length, "", "test", 0) == 0);
+    free(bytes);
+    assert(unload_module("host-fixture", 0) == 0);
+    assert(exec_allocations == 2 && exec_frees == 2);
 }
 
 static void exit_failure_never_frees_test(void)
@@ -342,6 +348,7 @@ static void failed_init_and_bounded_output_test(void)
     int length;
     void *bytes = fixture(1, &length);
     init_result = -EPERM;
+    exit_result = -EIO;
     assert(load_module(bytes, length, "", "test", 0) == -EPERM);
     free(bytes);
     assert(exec_frees == 0 && exit_calls == 1 && get_module_nums() == 1);
@@ -380,8 +387,25 @@ static void concurrent_control_unload_test(void)
     pthread_cond_broadcast(&test_condition);
     pthread_mutex_unlock(&test_mutex);
     assert(!pthread_join(worker, 0));
-    assert(unload_module("host-fixture", 0) == -EINPROGRESS);
-    assert(exit_calls == 1 && exec_frees == 0);
+    assert(unload_module("host-fixture", 0) == 0);
+    assert(exit_calls == 1 && exec_frees == 1 && get_module_nums() == 0);
+}
+
+static void failed_init_cleanup_test(void)
+{
+    int length;
+    void *bytes = fixture(1, &length);
+    init_result = -EINVAL;
+    assert(load_module(bytes, length, "", "test", 0) == -EINVAL);
+    assert(init_calls == 1 && exit_calls == 1 && exec_frees == 1);
+    assert(get_module_nums() == 0);
+    init_result = 0;
+    free(bytes);
+    bytes = fixture(1, &length);
+    assert(load_module(bytes, length, "", "test", 0) == 0);
+    free(bytes);
+    assert(unload_module("host-fixture", 0) == 0);
+    assert(exec_allocations == 2 && exec_frees == 2);
 }
 
 int main(void)
@@ -407,6 +431,8 @@ int main(void)
     reboot_loader();
     failed_init_snapshot_ownership_test();
     reboot_loader();
-    puts("KPM actual-loader regression tests: PASS (10 groups; 22 text-boundary cases)");
+    failed_init_cleanup_test();
+    reboot_loader();
+    puts("KPM actual-loader regression tests: PASS (11 groups; 22 text-boundary cases)");
     return 0;
 }

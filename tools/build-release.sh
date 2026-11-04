@@ -176,7 +176,8 @@ PY
 import pathlib, shutil, sys
 version_file, directory = map(pathlib.Path, sys.argv[1:3])
 version = dict(line.split("=", 1) for line in version_file.read_text().splitlines() if "=" in line)
-name, code = version["MILKSU_VERSION_NAME"], version["MILKSU_VERSION_CODE"]
+name = version["MILKSU_VERSION_NAME"]
+code = version.get("MILKSU_MANAGER_VERSION_CODE", version["MILKSU_VERSION_CODE"])
 target = directory / f"MilkSU_{name}_{code}.apk"
 shutil.copy2(directory / sys.argv[3], target)
 print(f"Stable release APK: {target}")

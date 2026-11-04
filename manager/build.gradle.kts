@@ -16,20 +16,22 @@ extra["androidTargetCompatibility"] = JavaVersion.VERSION_21
 val releaseVersion = java.util.Properties().apply {
     rootProject.file("../version.properties").inputStream().use { load(it) }
 }
-val stableVersionCode = requireNotNull(releaseVersion.getProperty("MILKSU_VERSION_CODE")?.toIntOrNull()) {
+val bundledKernelVersionCode = requireNotNull(releaseVersion.getProperty("MILKSU_VERSION_CODE")?.toIntOrNull()) {
     "version.properties must define MILKSU_VERSION_CODE"
 }
+val stableVersionCode = releaseVersion.getProperty("MILKSU_MANAGER_VERSION_CODE")?.toIntOrNull()
+    ?: bundledKernelVersionCode
 val stableVersionName = requireNotNull(releaseVersion.getProperty("MILKSU_VERSION_NAME")) {
     "version.properties must define MILKSU_VERSION_NAME"
 }
-val configuredVersionCode = providers.gradleProperty("MILKSU_VERSION_CODE")
-    .orElse(providers.environmentVariable("MILKSU_VERSION_CODE"))
+val configuredVersionCode = providers.gradleProperty("MILKSU_MANAGER_VERSION_CODE")
+    .orElse(providers.environmentVariable("MILKSU_MANAGER_VERSION_CODE"))
     .orElse(stableVersionCode.toString()).get().trim()
 val configuredVersionName = providers.gradleProperty("MILKSU_VERSION_NAME")
     .orElse(providers.environmentVariable("MILKSU_VERSION_NAME"))
     .orElse(stableVersionName).get().trim()
 val managerVersionCode = requireNotNull(configuredVersionCode.toIntOrNull()) {
-    "MILKSU_VERSION_CODE must be an integer"
+    "MILKSU_MANAGER_VERSION_CODE must be an integer"
 }
 require(managerVersionCode in stableVersionCode..2100000000) {
     "MILKSU_VERSION_CODE must be at least $stableVersionCode and never decrease between releases"
@@ -37,10 +39,11 @@ require(managerVersionCode in stableVersionCode..2100000000) {
 require(managerVersionCode >= 32800 && managerVersionCode == stableVersionCode &&
     configuredVersionName == stableVersionName
 ) {
-    "Manager, ksud and kernel versions must match version.properties; bump the manifest for a new release"
+    "Manager version must match version.properties"
 }
 require(Regex("(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)").matches(configuredVersionName)) {
     "MILKSU_VERSION_NAME must be a stable major.minor.patch version"
 }
 extra["managerVersionCode"] = managerVersionCode
 extra["managerVersionName"] = configuredVersionName
+extra["bundledKernelVersionCode"] = bundledKernelVersionCode

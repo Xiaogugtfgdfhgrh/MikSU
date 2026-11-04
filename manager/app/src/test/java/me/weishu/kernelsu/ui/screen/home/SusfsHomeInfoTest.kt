@@ -1,8 +1,6 @@
 package me.weishu.kernelsu.ui.screen.home
 
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -11,8 +9,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import me.weishu.kernelsu.data.system.BackendException
-import me.weishu.kernelsu.data.system.CommandExecutor
 import me.weishu.kernelsu.data.system.CommandOutput
+import me.weishu.kernelsu.data.system.SusfsProtocol
 import me.weishu.kernelsu.ui.screen.kpm.KpmUiState
 import me.weishu.kernelsu.ui.screen.kpm.SusfsState
 import org.junit.Assert.*
@@ -25,10 +23,11 @@ class SusfsHomeInfoTest {
         loaded: Boolean = true,
         builtin: Boolean = false,
         version: String = "v2.3.0",
+        variant: String? = "GKI-LKM",
     ) = KpmUiState(
         susfs = SusfsState(
             autoload = enabled, supported = supported, loaded = loaded,
-            builtin = builtin, version = version,
+            builtin = builtin, version = version, variant = variant,
         ),
     )
 
@@ -46,17 +45,19 @@ class SusfsHomeInfoTest {
         val info = SusfsHomeInfo(integrationEnabled = true).merge(SusfsHomeSnapshot.from(KpmUiState()))
         assertTrue(info.integrationEnabled)
         assertFalse(info.supported)
+        assertEquals(SusfsAvailability.Unknown, info.availability)
         assertNull(info.version)
     }
 
     @Test fun actualRuntimeVersionIsUsedAndVariantSurvivesEquivalentRefreshes() {
-        val snapshot = SusfsHomeSnapshot.from(state(version = " v2.3.0 "))
-        val info = SusfsHomeInfo().merge(snapshot).copy(variant = "SUSFS_LKM_MODULES")
+        val snapshot = SusfsHomeSnapshot.from(state(version = " v2.3.0 ", variant = " GKI-LKM "))
+        val info = SusfsHomeInfo().merge(snapshot)
         assertTrue(info.integrationEnabled)
         assertTrue(info.supported)
         assertEquals("v2.3.0", info.version)
+        assertEquals("GKI-LKM", info.variant)
         assertEquals(info, info.merge(snapshot))
-        assertNull(info.merge(SusfsHomeSnapshot.from(state(version = "v2.4.0"))).variant)
+        assertNull(info.merge(SusfsHomeSnapshot.from(state(version = "v2.4.0", variant = null))).variant)
     }
 
     @Test fun enabledButStoppedOrFailedProviderIsNotReportedSupported() {
@@ -70,6 +71,11 @@ class SusfsHomeInfoTest {
             assertFalse(info.supported)
             assertNull(info.version)
             assertNull(info.variant)
+            assertEquals(
+                if (current.susfs.supported == false) SusfsAvailability.Unavailable
+                else SusfsAvailability.Unknown,
+                info.availability,
+            )
         }
     }
 
@@ -82,13 +88,13 @@ class SusfsHomeInfoTest {
     }
 
     @Test fun aConfirmedDisableClearsAllPreviousRuntimeDetails() {
-        val info = SusfsHomeInfo(true, true, "v2.3.0", "SUSFS_LKM_MODULES")
+        val info = SusfsHomeInfo().merge(SusfsHomeSnapshot.from(state()))
             .merge(SusfsHomeSnapshot.from(state(enabled = false, supported = false, loaded = false)))
         assertEquals(SusfsHomeInfo(), info)
     }
 
-    @Test fun queryFailurePreservesVisibilityButCannotPresentStaleSupport() {
-        val previous = SusfsHomeInfo(true, true, "v2.3.0", "SUSFS_LKM_MODULES")
+    @Test fun queryFailurePreservesTheLastConfirmedRuntimeInformation() {
+        val previous = SusfsHomeInfo().merge(SusfsHomeSnapshot.from(state()))
         val failed = state().let {
             it.copy(susfs = it.susfs.queryFailed(BackendException("read", "failed")))
         }
@@ -97,19 +103,19 @@ class SusfsHomeInfoTest {
             SusfsHomeSnapshot.from(state().copy(unavailable = "No root")),
         )) {
             assertFalse(snapshot.confirmed)
-            assertEquals(SusfsHomeInfo(integrationEnabled = true), previous.merge(snapshot))
+            assertEquals(previous, previous.merge(snapshot))
         }
     }
 
     @Test fun unknownFieldsAndBusyFlagsDoNotProduceOffOnVisibilityChanges() {
-        val previous = SusfsHomeInfo(true, true, "v2.3.0", "SUSFS_LKM_MODULES")
+        val previous = SusfsHomeInfo().merge(SusfsHomeSnapshot.from(state()))
         for (partial in listOf(
             state().susfs.copy(supported = null), state().susfs.copy(loaded = null),
             state().susfs.copy(builtin = null), state().susfs.copy(autoload = null),
         )) {
             val snapshot = SusfsHomeSnapshot.from(KpmUiState(susfs = partial))
             assertFalse(snapshot.confirmed)
-            assertTrue(previous.merge(snapshot).integrationEnabled)
+            assertEquals(previous, previous.merge(snapshot))
         }
         assertEquals(previous, previous.merge(SusfsHomeSnapshot.from(state().copy(busy = true))))
     }
@@ -121,136 +127,136 @@ class SusfsHomeInfoTest {
         assertEquals("SUSFS-LKM", SusfsHomeInfo.runtimeValue(" SUSFS-LKM\n"))
     }
 
-    @Test fun variantIsReadFromTheActualBackend() = runBlocking {
-        val calls = mutableListOf<List<String>>()
-        val query = SusfsHomeInfoQuery(CommandExecutor {
-            calls += it
-            CommandOutput(0, "SUSFS_LKM_MODULES\n", "")
-        })
-        assertEquals("SUSFS_LKM_MODULES", query.variant())
-        assertEquals(listOf(listOf("susfs", "variant")), calls)
+    @Test fun statusVersionAndVariantAreMergedTogetherWithoutAnIntermediatePlaceholder() {
+        val info = SusfsHomeInfo().merge(SusfsHomeSnapshot.from(state()))
+        assertEquals("Supported | v2.3.0 (GKI-LKM)", info.summary("Supported", "Unavailable", "Unknown"))
     }
 
-    @Test fun failedOrInvalidVariantQueryDoesNotInventAModuleVariant() = runBlocking {
-        for (output in listOf(
-            CommandOutput(1, "SUSFS_LKM_MODULES", "failed"),
-            CommandOutput(0, "", ""), CommandOutput(0, "Unknown", ""),
-            CommandOutput(0, "SUSFS\nextra output", ""),
+    @Test fun statusJsonPassesVariantThroughTheSharedStateAndAcceptsOlderDaemons() {
+        for (variantField in listOf("", ""","variant":null""", ""","variant":"GKI-LKM"""")) {
+            val status = SusfsProtocol.decodeStatus(CommandOutput(
+                0,
+                """{"supported":true,"loaded":true,"builtin":false,"autoload":true,"version":"v2.3.0"$variantField}""",
+                "",
+            ))
+            val state = KpmUiState(susfs = SusfsState().merge(status))
+            val info = SusfsHomeInfo().merge(SusfsHomeSnapshot.from(state))
+            assertTrue(info.supported)
+            assertEquals("v2.3.0", info.version)
+            assertEquals(if (variantField.contains("GKI-LKM")) "GKI-LKM" else null, info.variant)
+        }
+    }
+
+    @Test fun missingVariantDoesNotMakeAnOperationalGuardUnavailable() {
+        for (variant in listOf(
+            null, "", "Unknown", "Unsupported", "Unavailable", "GKI-LKM\nextra output",
         )) {
-            assertNull(SusfsHomeInfoQuery(CommandExecutor { output }).variant())
+            val info = SusfsHomeInfo().merge(SusfsHomeSnapshot.from(state(variant = variant)))
+            assertEquals(SusfsAvailability.Available, info.availability)
+            assertNull(info.variant)
+            assertEquals("Supported | v2.3.0 (Unknown)", info.summary("Supported", "Unavailable", "Unknown"))
         }
     }
 
-    @Test fun cancellingVariantQueryIsPropagated() = runBlocking {
-        try {
-            SusfsHomeInfoQuery(CommandExecutor { throw CancellationException("cancelled") }).variant()
-            fail("Cancellation must not be swallowed")
-        } catch (_: CancellationException) {
-        }
+    @Test fun unknownAndExplicitlyUnavailableHaveDifferentSummaries() {
+        val unknown = SusfsHomeInfo(integrationEnabled = true)
+        assertEquals("Unknown", unknown.summary("Supported", "Unavailable", "Unknown"))
+        val unavailable = unknown.merge(SusfsHomeSnapshot.from(state(supported = false)))
+        assertEquals(SusfsAvailability.Unavailable, unavailable.availability)
+        assertEquals("Unavailable", unavailable.summary("Supported", "Unavailable", "Unknown"))
+        assertEquals("Unknown", unavailable.merge(SusfsHomeSnapshot.from(KpmUiState()))
+            .summary("Supported", "Unavailable", "Unknown"))
     }
 
-    @Test fun aHomeRefreshRetriesVariantAfterFailureWithoutChangingIntegration() = runBlocking {
+    @Test fun aMissingVariantOnTheSameProviderRetainsTheConfirmedVariant() {
+        val previous = SusfsHomeInfo().merge(SusfsHomeSnapshot.from(state()))
+        assertEquals(previous, previous.merge(SusfsHomeSnapshot.from(state(variant = null))))
+        assertNull(previous.merge(SusfsHomeSnapshot.from(state(builtin = true, variant = null))).variant)
+    }
+
+    @Test fun homeRefreshReemitsTheAuthoritativeSnapshotWithoutAnExtraCommand() = runBlocking {
         withTimeout(5_000) {
             val integration = MutableStateFlow(state())
             val refresh = MutableStateFlow(0)
-            val first = CompletableDeferred<Unit>()
-            val recovered = CompletableDeferred<String?>()
-            var calls = 0
-            val query = SusfsHomeInfoQuery(CommandExecutor {
-                calls++
-                if (calls == 1) CommandOutput(1, "", "temporarily unavailable")
-                else CommandOutput(0, "SUSFS_LKM_MODULES", "")
-            })
+            val first = CompletableDeferred<SusfsHomeInfo>()
+            val refreshed = CompletableDeferred<SusfsHomeInfo>()
+            var count = 0
             val observer = launch {
                 susfsHomeSnapshots(integration, refresh).collectLatest { snapshot ->
-                    if (snapshot.operational) {
-                        val variant = query.variant()
-                        if (calls == 1) {
-                            assertNull(variant)
-                            first.complete(Unit)
-                        } else recovered.complete(variant)
-                    }
+                    val info = SusfsHomeInfo().merge(snapshot)
+                    if (++count == 1) first.complete(info) else refreshed.complete(info)
                 }
             }
             try {
-                first.await()
+                val initial = first.await()
                 refresh.value++
-                assertEquals("SUSFS_LKM_MODULES", recovered.await())
-                assertTrue(integration.value.susfsIntegrationEnabled)
-                assertEquals(2, calls)
+                assertEquals(initial, refreshed.await())
+                assertEquals("GKI-LKM", initial.variant)
             } finally {
                 observer.cancelAndJoin()
             }
         }
     }
 
-    @Test fun anAuthoritativeDisableCancelsAnInflightVariantQuery() = runBlocking {
-        withTimeout(5_000) {
-            val integration = MutableStateFlow(state())
-            val refresh = MutableStateFlow(0)
-            val started = CompletableDeferred<Unit>()
-            val release = CompletableDeferred<Unit>()
-            val disabled = CompletableDeferred<Unit>()
-            var result = SusfsHomeInfo()
-            val query = SusfsHomeInfoQuery(CommandExecutor {
-                started.complete(Unit)
-                release.await()
-                CommandOutput(0, "stale-variant", "")
-            })
-            val observer = launch {
-                susfsHomeSnapshots(integration, refresh).collectLatest { snapshot ->
-                    result = result.merge(snapshot)
-                    if (snapshot.operational) {
-                        result = result.copy(variant = query.variant())
-                    } else disabled.complete(Unit)
-                }
-            }
-            try {
-                started.await()
-                integration.value = state(enabled = false, supported = false, loaded = false)
-                disabled.await()
-                release.complete(Unit)
-                yield()
-                assertEquals(SusfsHomeInfo(), result)
-            } finally {
-                observer.cancelAndJoin()
-            }
-        }
-    }
-
-    @Test fun unknownStatusDoesNotQueryMetadataAndObserverCancellationStopsReading() = runBlocking {
+    @Test fun observerRetainsConfirmedMetadataOnErrorsAndStopsWhenCancelled() = runBlocking {
         withTimeout(5_000) {
             val integration = MutableStateFlow(KpmUiState())
             val refresh = MutableStateFlow(0)
             val unknown = CompletableDeferred<Unit>()
             val active = CompletableDeferred<Unit>()
+            val failed = CompletableDeferred<Unit>()
+            var result = SusfsHomeInfo(integrationEnabled = true)
             var calls = 0
-            val query = SusfsHomeInfoQuery(CommandExecutor {
-                calls++
-                CommandOutput(0, "SUSFS_LKM_MODULES", "")
-            })
-            val observer: Job = launch {
+            val observer = launch {
                 susfsHomeSnapshots(integration, refresh).collectLatest { snapshot ->
-                    if (snapshot.operational) {
-                        query.variant()
-                        active.complete(Unit)
-                    } else unknown.complete(Unit)
+                    calls++
+                    result = result.merge(snapshot)
+                    if (snapshot.state.queryError != null) failed.complete(Unit)
+                    else if (snapshot.operational) active.complete(Unit)
+                    else unknown.complete(Unit)
                 }
             }
             try {
                 unknown.await()
-                assertEquals(0, calls)
+                assertEquals(SusfsAvailability.Unknown, result.availability)
                 integration.value = state()
                 active.await()
-                assertEquals(1, calls)
+                val confirmed = result
+                integration.value = state().let {
+                    it.copy(susfs = it.susfs.queryFailed(BackendException("query", "failed")))
+                }
+                failed.await()
+                assertEquals(confirmed, result)
                 observer.cancelAndJoin()
+                val observedCalls = calls
                 refresh.value++
                 integration.value = state(version = "v2.4.0")
                 yield()
-                assertEquals(1, calls)
+                assertEquals(observedCalls, calls)
+                assertEquals(confirmed, result)
             } finally {
                 observer.cancelAndJoin()
             }
         }
+    }
+
+    @Test fun successfulReadOfAFailedOwnedGuardCannotBeOverriddenByItsVersion() {
+        val failed = state(supported = false).let {
+            it.copy(susfs = it.susfs.copy(reason = "Guard is resident but not operational"))
+        }
+        val previous = SusfsHomeInfo().merge(SusfsHomeSnapshot.from(state()))
+        val result = previous.merge(SusfsHomeSnapshot.from(failed))
+        assertTrue(result.integrationEnabled)
+        assertEquals(SusfsAvailability.Unavailable, result.availability)
+        assertNull(result.version)
+        assertNull(result.variant)
+    }
+
+    @Test fun actionFailureDoesNotOverrideAnOtherwiseConfirmedRuntimeStatus() {
+        val running = state().let {
+            it.copy(susfs = it.susfs.copy(error = BackendException("action", "failed")))
+        }
+        assertTrue(SusfsHomeSnapshot.from(running).confirmed)
+        assertTrue(SusfsHomeInfo().merge(SusfsHomeSnapshot.from(running)).supported)
     }
 }

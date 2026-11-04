@@ -11,6 +11,7 @@ data class SusfsStatus(
     val version: String? = null,
     val kmi: String? = null,
     val reason: String? = null,
+    val variant: String? = null,
 )
 
 object SusfsProtocol {

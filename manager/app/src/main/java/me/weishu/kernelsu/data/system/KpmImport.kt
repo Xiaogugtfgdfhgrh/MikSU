@@ -8,8 +8,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
-data class KpmImportResult(val report: KpmReport, val isNew: Boolean)
-
 object KpmImport {
     suspend fun importDocument(context: Context, uri: Uri, repository: KpmRepository): KpmImportResult =
         withContext(Dispatchers.IO) {
@@ -36,12 +34,7 @@ object KpmImport {
                 val input = resolver.openInputStream(uri)
                     ?: throw BackendException("read_failed", "Cannot open the selected document")
                 input.use { source -> file.outputStream().use { KpmDocument.copyBounded(source, it) } }
-                val before = repository.refresh()
-                before.error?.let { throw it }
-                val existingIds = before.modules?.map { it.id }?.toSet()
-                    ?: throw BackendException("invalid_data", "Cannot read the KPM registry")
-                val report = repository.mutate(listOf("kpm", "import", file.absolutePath))
-                KpmImportResult(report, report.detail?.id?.let { it !in existingIds } == true)
+                repository.importModule(file.absolutePath)
             } finally {
                 staged?.delete()
                 if (acquiredPermission) {

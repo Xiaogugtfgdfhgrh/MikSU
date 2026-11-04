@@ -12,7 +12,7 @@
     <string name="kpm_dialog_title">KPModule</string>
     <string name="kpm_control_title">Control KPModule</string>
     <string name="kpm_temporary_load">Load temporarily</string>
-    <string name="kpm_load_message">%1$s will be loaded.</string>
+    <string name="kpm_load_message">%1$s will be installed.</string>
     <string name="kpm_unload_message">Unload module %1$s?</string>
     <string name="kpm_author">Author: %1$s</string>
     <string name="kpm_parameter_value">Parameters: %1$s</string>
@@ -24,6 +24,7 @@
     <string name="kpm_unavailable">Unavailable</string>
     <string name="kpm_error">Error</string>
     <string name="kpm_integration">KPM integration</string>
+    <string name="kpm_update_required">Update required</string>
     <string name="kpm_integration_summary">Disabled by default. Changing integration updates the current boot image with a verified backup. A full device reboot applies the change. Imported KPMs are registered without loading or enabling auto-load.</string>
     <string name="kpm_full_reboot">Reboot device</string>
     <string name="kpm_boot_confirm">Fully reboot the device to apply the updated kernel. A soft reboot does not apply this change.</string>
@@ -33,7 +34,7 @@
     <string name="kpm_pending_unload">Unload pending reboot</string>
     <string name="kpm_arguments">Arguments</string>
     <string name="kpm_autoload">Load at boot</string>
-    <string name="kpm_load">Load</string>
+    <string name="kpm_load">Install</string>
     <string name="kpm_control">Control</string>
     <string name="kpm_unload">Unload</string>
     <string name="kpm_remove">Remove file</string>

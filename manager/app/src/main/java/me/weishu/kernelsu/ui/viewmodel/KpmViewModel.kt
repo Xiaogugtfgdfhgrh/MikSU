@@ -6,6 +6,7 @@ import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -22,6 +23,8 @@ import me.weishu.kernelsu.data.system.SusfsProtocol
 import me.weishu.kernelsu.data.system.backendError
 import me.weishu.kernelsu.ksuApp
 import me.weishu.kernelsu.ui.screen.home.HomeStartupState
+import me.weishu.kernelsu.ui.screen.home.SusfsHomeCache
+import me.weishu.kernelsu.ui.screen.home.SusfsHomeSnapshot
 import me.weishu.kernelsu.ui.screen.kpm.KpmUiState
 import me.weishu.kernelsu.ui.util.getRootShell
 
@@ -43,14 +46,37 @@ class KpmViewModel : ViewModel() {
     )
     val homeStartupState = _homeStartupState.asStateFlow()
     private val operations = Mutex()
+    private var integrationVerificationJob: Job? = null
     private var detailId: String? = null
 
-    fun refresh(includeSusfs: Boolean = false) = operation(
-        mutating = false,
-        completesSusfsStartup = includeSusfs,
-    ) {
-        if (includeSusfs) refreshSusfs()
-        applyReport(SystemBackends.kpm.refresh())
+    fun prewarmIntegration() {
+        if (integrationVerificationJob?.isActive == true) return
+        integrationVerificationJob = viewModelScope.launch {
+            val report = withContext(Dispatchers.IO) {
+                val eligible = "arm64-v8a" in Build.SUPPORTED_ABIS &&
+                    runCatching {
+                        Natives.isManager && Natives.kernelUAPIVersion == Natives.managerUAPIVersion
+                    }.getOrDefault(false)
+                if (eligible) SystemBackends.kpm.verifyIntegration(SystemBackends.integrationVerifier) else null
+            }
+            report?.let { checked ->
+                _uiState.update {
+                    if (!it.busy && SystemBackends.kpm.isCurrentVerification(checked)) {
+                        it.mergeIntegrationVerification(checked)
+                    } else it
+                }
+            }
+        }
+    }
+
+    fun refresh(includeSusfs: Boolean = false, verifyIntegration: Boolean = false): Job {
+        if (verifyIntegration) prewarmIntegration()
+        return operation(mutating = false, completesSusfsStartup = includeSusfs) {
+            if (includeSusfs) refreshSusfs()
+            if (_uiState.value.pendingImport == null) {
+                applyReport(SystemBackends.kpm.refresh())
+            }
+        }
     }
 
     fun showDetail(id: String) = operation {
@@ -90,7 +116,7 @@ class KpmViewModel : ViewModel() {
     fun cancelImport() = operation {
         val pending = _uiState.value.pendingImport ?: return@operation
         if (_uiState.value.pendingImportIsNew) {
-            val current = SystemBackends.kpm.refresh()
+            val current = SystemBackends.kpm.list()
             applyReport(current)
             if (current.error != null) return@operation
             val module = current.modules?.find { it.id == pending.id }
@@ -123,7 +149,22 @@ class KpmViewModel : ViewModel() {
 
     fun integrate(enabled: Boolean) = mutate(listOf("integration", if (enabled) "enable" else "disable"))
 
-    fun fullReboot() = operation {
+    fun upgradeIntegration() = operation {
+        if (!_uiState.value.copy(busy = false).canUpgradeIntegration) {
+            throw BackendException("upgrade_unavailable", "A KPM integration upgrade is not available")
+        }
+        val report = SystemBackends.kpm.mutate(listOf("kpm", "integration", "enable"))
+        applyReport(report)
+        report.error?.let { return@operation }
+        if (!report.verifiesIntegrationUpgrade) {
+            throw BackendException("unconfirmed_upgrade", "The KPM engine upgrade was not verified")
+        }
+        rebootDevice()
+    }
+
+    fun fullReboot() = operation { rebootDevice() }
+
+    private fun rebootDevice() {
         val shell = getRootShell(true)
         if (!shell.isRoot) throw BackendException("root_unavailable", "Root access is required")
         val stdout = mutableListOf<String>()
@@ -204,9 +245,28 @@ class KpmViewModel : ViewModel() {
         try {
             val status = SusfsProtocol.decodeStatus(SystemBackends.executor.execute(listOf("susfs", "status")))
             state = state.merge(status)
-            val enabled = _uiState.value.copy(susfs = state).susfsIntegrationEnabled
+            val confirmed = _uiState.value.copy(susfs = state)
+            val enabled = confirmed.susfsIntegrationEnabled
             confirmedEnabled = enabled
-            integrationPreferences.edit().putBoolean("home_susfs_enabled", enabled).apply()
+            val cached = SusfsHomeCache(
+                available = integrationPreferences.getBoolean(SusfsHomeCache.AVAILABLE_KEY, false),
+                version = integrationPreferences.getString(SusfsHomeCache.VERSION_KEY, null),
+                variant = integrationPreferences.getString(SusfsHomeCache.VARIANT_KEY, null),
+                builtin = if (integrationPreferences.contains(SusfsHomeCache.BUILTIN_KEY)) {
+                    integrationPreferences.getBoolean(SusfsHomeCache.BUILTIN_KEY, false)
+                } else null,
+            ).restore(integrationPreferences.getBoolean("home_susfs_enabled", false))
+            val cache = SusfsHomeCache.from(cached.merge(SusfsHomeSnapshot.from(confirmed)))
+            integrationPreferences.edit().apply {
+                putBoolean("home_susfs_enabled", enabled)
+                putBoolean(SusfsHomeCache.AVAILABLE_KEY, cache.available)
+                putString(SusfsHomeCache.VERSION_KEY, cache.version)
+                putString(SusfsHomeCache.VARIANT_KEY, cache.variant)
+                cache.builtin?.let {
+                    putBoolean(SusfsHomeCache.BUILTIN_KEY, it)
+                } ?: remove(SusfsHomeCache.BUILTIN_KEY)
+                apply()
+            }
         } catch (e: Exception) {
             state = state.queryFailed(e.backendError())
         }

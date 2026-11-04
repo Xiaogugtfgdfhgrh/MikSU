@@ -38,14 +38,14 @@ fun SettingPager(
     LaunchedEffect(isCurrentPage) {
         if (isCurrentPage) {
             viewModel.refresh()
-            systemViewModel.refresh(includeSusfs = true)
+            systemViewModel.refresh(includeSusfs = true, verifyIntegration = true)
         }
     }
 
     LifecycleResumeEffect(Unit) {
         if (initialResumeHandled.value && latestIsCurrentPage) {
             viewModel.refresh()
-            systemViewModel.refresh(includeSusfs = true)
+            systemViewModel.refresh(includeSusfs = true, verifyIntegration = true)
         }
         initialResumeHandled.value = true
         onPauseOrDispose { }
@@ -84,6 +84,11 @@ fun SettingPager(
             if (systemState.canSetIntegration(enabled)) {
                 pendingIntegration = enabled
                 integrationDialog.showConfirm(title = integrationTitle)
+            }
+        },
+        onUpgradeKpmIntegration = {
+            if (latestSystemState.canUpgradeIntegration) {
+                systemViewModel.upgradeIntegration()
             }
         },
         onSetSusfsAutoload = { enabled ->

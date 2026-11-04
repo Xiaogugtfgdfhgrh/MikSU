@@ -80,6 +80,24 @@ pub fn classify(
     }
 }
 
+pub fn runtime_supported(
+    version: Option<&str>,
+    features: &[String],
+    load_error: Option<i32>,
+    restore_error: Option<i32>,
+    stopping: Option<bool>,
+    unload_ready: Option<bool>,
+) -> bool {
+    version.is_some_and(|version| !version.is_empty())
+        && features
+            .iter()
+            .any(|feature| feature == MODULE_MARKER || feature.starts_with("CONFIG_KSU_SUSFS_"))
+        && load_error.is_none_or(|error| error == 0)
+        && restore_error.is_none_or(|error| error == 0)
+        && stopping != Some(true)
+        && unload_ready != Some(true)
+}
+
 pub fn arm64_module_elf(bytes: &[u8]) -> bool {
     bytes.len() >= 64
         && &bytes[..4] == b"\x7fELF"
@@ -159,6 +177,68 @@ mod tests {
             Provider::Inconsistent
         );
         assert_eq!(classify(true, false, None, None, &[]), Provider::Lkm);
+    }
+
+    #[test]
+    fn runtime_support_is_separate_from_private_guard_ownership() {
+        let features = vec!["CONFIG_KSU_SUSFS_SUS_PATH".into()];
+        assert!(runtime_supported(
+            Some("v2.3.0"),
+            &features,
+            None,
+            None,
+            None,
+            None
+        ));
+        assert!(runtime_supported(
+            Some("v2.0.0"),
+            &features,
+            None,
+            None,
+            None,
+            None
+        ));
+        assert!(!runtime_supported(None, &features, None, None, None, None));
+        assert!(!runtime_supported(
+            Some("v2.3.0"),
+            &[],
+            None,
+            None,
+            None,
+            None
+        ));
+        assert!(!runtime_supported(
+            Some("v2.3.0"),
+            &features,
+            Some(-5),
+            Some(0),
+            None,
+            None
+        ));
+        assert!(!runtime_supported(
+            Some("v2.3.0"),
+            &features,
+            Some(0),
+            Some(-5),
+            None,
+            None
+        ));
+        assert!(!runtime_supported(
+            Some("v2.3.0"),
+            &features,
+            Some(0),
+            Some(0),
+            Some(true),
+            None
+        ));
+        assert!(!runtime_supported(
+            Some("v2.3.0"),
+            &features,
+            Some(0),
+            Some(0),
+            Some(false),
+            Some(true)
+        ));
     }
 
     #[test]

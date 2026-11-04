@@ -17,6 +17,7 @@ const INFO: u32 = 0x1032;
 const CAPABILITIES: u32 = 0x1033;
 const HELLO_MAGIC: i64 = 0x2026_2026;
 pub(super) const REQUIRED_CAPABILITIES: u64 = 0x3f;
+pub(super) const UNLOAD_CAPABILITY: u64 = 0x40;
 pub(super) const OUTPUT_LIMIT: usize = 4096;
 pub(super) const ARGS_LIMIT: usize = 1023;
 
@@ -29,6 +30,11 @@ pub(super) struct Probe {
 }
 
 impl Probe {
+    pub const fn can_unload(&self) -> bool {
+        self.managed()
+            && matches!(self.capabilities, Some(capabilities) if capabilities & UNLOAD_CAPABILITY != 0)
+    }
+
     pub const fn avc_conflict(&self) -> bool {
         self.error.is_some() || (self.active && !self.managed())
     }

@@ -9,7 +9,7 @@ control reply. They must never be embedded in boot images or release assets.
 | --- | --- | --- |
 | `milksu-test-echo.kpm` | `milksu-test-echo` | init succeeds; ctl0 returns `echo: <literal arguments>`; exit returns 0 |
 | `milksu-test-no_ctl0.kpm` | `milksu-test-no-ctl0` | init succeeds; `has_control=false`; control returns `no_control` |
-| `milksu-test-init_error.kpm` | `milksu-test-init-error` | init returns `-EINVAL`; load fails; resident record is failed/pending unload |
+| `milksu-test-init_error.kpm` | `milksu-test-init-error` | init returns `-EINVAL`; load fails; successful exit releases the instance |
 | `milksu-test-exit_error.kpm` | `milksu-test-exit-error` | init succeeds; exit returns `-EIO`; code remains resident |
 
 Build from the MilkSU root:
@@ -35,13 +35,12 @@ MilkSU. It imports only these four named fixtures and never enables auto-load.
 It also checks each command's JSON envelope and process completion with a
 timeout. A hung unload is a failure, never a successful unload.
 
-Successful fixture exits still leave code resident under MilkSU's conservative
-loader policy. Acceptance therefore expects `ok=false`, `reboot_required`,
-`loaded=true`, `pending_unload=true`, and the stored `.kpm` remaining present.
-An init-error or exit-error fixture must also remain stored/resident. The
-runner does not reboot, remove the integration, or delete registrations; the
-test operator must reboot, confirm that the fixtures are no longer loaded,
-and remove their registrations.
+Successful fixture exits release the runtime instance immediately. Acceptance
+checks that the module can reload in the same boot and that removing a loaded
+module unloads it and deletes its stored file. Failed initialization also
+releases the instance when its exit succeeds. A failed exit preserves the
+resident instance and its stored file. The runner leaves only the exit-error
+fixture for the test operator to remove after a reboot.
 
 Example after kernel integration and a matching MilkSU ksud are installed:
 

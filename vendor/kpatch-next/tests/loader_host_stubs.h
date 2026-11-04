@@ -41,6 +41,11 @@ static void list_add_tail(struct list_head *entry, struct list_head *head)
     head->prev->next = entry;
     head->prev = entry;
 }
+static void list_del(struct list_head *entry)
+{
+    entry->next->prev = entry->prev;
+    entry->prev->next = entry->next;
+}
 
 #include "../kernel/include/kpmodule.h"
 #include "../kernel/include/baselib.h"

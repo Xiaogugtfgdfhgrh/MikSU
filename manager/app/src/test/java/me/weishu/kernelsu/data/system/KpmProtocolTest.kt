@@ -54,6 +54,189 @@ class KpmProtocolTest {
         ))
         assertEquals(IntegrationState.OFF, integrationState(status))
         assertNull(status.version)
+        assertTrue(status.integrationVerified)
+        assertFalse(status.canUnload)
+    }
+
+    @Test fun runtimeStatusUsesCurrentPreflightEligibilityAndUpgradeWithoutClaimingVerification() {
+        val verified = KpmStatus(
+            supported = true, configuredEnabled = true, active = true, rebootRequired = false,
+            version = "old", canConfigure = true, canEnable = true, canDisable = true,
+            upgradeAvailable = true, canUnload = false,
+        )
+        val full = KpmUiState(canPatchBoot = true).merge(KpmReport(verified, emptyList()))
+        val runtime = KpmProtocol.decode<KpmStatus>(output(
+            """{"supported":true,"configured_enabled":true,"active":true,"reboot_required":false,"version":"new","can_configure":false,"can_enable":false,"can_disable":false,"upgrade_available":false,"integration_verified":false,"can_unload":true}"""
+        ))
+        val refreshed = full.merge(KpmReport(runtime, emptyList(), statusQueried = true))
+        assertFalse(refreshed.status!!.integrationVerified)
+        assertEquals("new", refreshed.status.version)
+        assertTrue(refreshed.status.canUnload)
+        assertEquals(false, refreshed.status.canConfigure)
+        assertEquals(false, refreshed.status.canEnable)
+        assertEquals(false, refreshed.status.canDisable)
+        assertFalse(refreshed.status.upgradeAvailable)
+        assertFalse(refreshed.hasFreshIntegrationStatus)
+        assertFalse(refreshed.canSetIntegration(false))
+        assertFalse(refreshed.canUpgradeIntegration)
+        assertTrue(refreshed.canLoad)
+        assertFalse(refreshed.merge(KpmReport(runtime, emptyList(), statusQueried = true)).canUpgradeIntegration)
+    }
+
+    @Test fun freshRuntimeStatusCanRequestUpgradePreflightWithoutAnyFullImageQuery() {
+        val runtime = KpmStatus(
+            supported = true, configuredEnabled = true, active = true, rebootRequired = false,
+            canEnable = true, canDisable = true, upgradeAvailable = true, integrationVerified = false,
+        )
+        val report = KpmReport(runtime, emptyList(), statusQueried = true)
+        val state = KpmUiState(canPatchBoot = true).merge(report)
+        assertTrue(state.hasFreshStatus)
+        assertFalse(state.hasFreshIntegrationStatus)
+        assertFalse(state.status!!.integrationVerified)
+        assertTrue(state.showUpgradeIntegration)
+        assertTrue(state.canUpgradeIntegration)
+        assertTrue(state.canSetIntegration(false))
+        assertFalse(report.verifiesIntegrationUpgrade)
+        assertFalse(state.copy(busy = true).canUpgradeIntegration)
+        assertFalse(state.copy(safeMode = true).canUpgradeIntegration)
+        assertFalse(state.copy(canPatchBoot = false).canUpgradeIntegration)
+        assertFalse(state.copy(unavailable = "No root").canUpgradeIntegration)
+        assertFalse(state.copy(status = runtime.copy(stateKnown = false)).canUpgradeIntegration)
+        assertFalse(state.copy(status = runtime.copy(canEnable = false)).canUpgradeIntegration)
+        assertFalse(state.copy(status = runtime.copy(canEnable = null)).canUpgradeIntegration)
+    }
+
+    @Test fun runtimeDetailsCannotRecoverFailedStatusOrModuleSnapshotAccess() {
+        val runtime = KpmStatus(
+            supported = true, configuredEnabled = true, active = true, rebootRequired = false,
+            canEnable = true, upgradeAvailable = true, integrationVerified = false,
+        )
+        val report = KpmReport(runtime, emptyList(), statusQueried = true)
+        val ready = KpmUiState(canPatchBoot = true).merge(report)
+        assertTrue(ready.canUpgradeIntegration)
+        for (failedReport in listOf(
+            KpmReport(error = BackendException("status", "failed"), statusQueried = true),
+            KpmReport(status = runtime, error = BackendException("list", "failed"), statusQueried = true),
+            KpmReport(error = BackendException("info", "failed")),
+        )) {
+            val failed = ready.merge(failedReport)
+            assertFalse(failed.canUpgradeIntegration)
+            assertFalse(failed.merge(KpmReport()).canUpgradeIntegration)
+            assertFalse(failed.merge(KpmReport(modules = emptyList())).canUpgradeIntegration)
+            assertTrue(failed.merge(report).canUpgradeIntegration)
+        }
+    }
+
+    @Test fun currentRuntimeUpgradeDetectionSupersedesPreviousFullImageEligibility() {
+        val verified = KpmStatus(
+            supported = true, configuredEnabled = true, active = true, rebootRequired = false,
+            canEnable = false, canDisable = false, upgradeAvailable = false,
+        )
+        val state = KpmUiState(canPatchBoot = true).merge(KpmReport(verified, emptyList()))
+        val runtime = verified.copy(
+            canEnable = true, canDisable = true, upgradeAvailable = true, integrationVerified = false,
+        )
+        val ready = state.merge(KpmReport(runtime, emptyList(), statusQueried = true))
+        assertTrue(ready.showUpgradeIntegration)
+        assertTrue(ready.canUpgradeIntegration)
+        assertFalse(ready.status!!.integrationVerified)
+        val current = ready.merge(KpmReport(runtime.copy(upgradeAvailable = false), emptyList(), statusQueried = true))
+        assertFalse(current.showUpgradeIntegration)
+        assertFalse(current.canUpgradeIntegration)
+    }
+
+    @Test fun missingRuntimeRequestFlagsRequireAMatchingFreshVerification() {
+        val verified = KpmStatus(
+            supported = true, configuredEnabled = true, active = true, rebootRequired = false,
+            canEnable = true, canDisable = true, upgradeAvailable = true,
+        )
+        val ready = KpmUiState(canPatchBoot = true).merge(KpmReport(verified, emptyList()))
+        val runtime = verified.copy(
+            canEnable = null, canDisable = null, canConfigure = true, integrationVerified = false,
+        )
+        val current = ready.merge(KpmReport(runtime, emptyList(), statusQueried = true))
+        assertNull(current.status!!.canEnable)
+        assertNull(current.status.canDisable)
+        assertTrue(current.canUpgradeIntegration)
+        assertTrue(current.canChangeIntegration)
+        assertFalse(current.copy(integrationVerification = null).canUpgradeIntegration)
+        assertFalse(current.copy(integrationVerification = null).canChangeIntegration)
+    }
+
+    @Test fun firstEnableAndDisableFollowExplicitRuntimeRequestFlags() {
+        for (enabled in listOf(false, true)) {
+            for (canEnable in listOf(false, true)) {
+                for (canDisable in listOf(false, true)) {
+                    val runtime = KpmStatus(
+                        supported = true, configuredEnabled = enabled, active = enabled, rebootRequired = false,
+                        canEnable = canEnable, canDisable = canDisable,
+                        canConfigure = !(if (enabled) canDisable else canEnable),
+                        integrationVerified = false,
+                    )
+                    val ready = KpmUiState(canPatchBoot = true).merge(KpmReport(runtime, emptyList()))
+                    assertFalse(ready.hasFreshIntegrationStatus)
+                    assertEquals(if (enabled) canDisable else canEnable, ready.canChangeIntegration)
+                    assertFalse(ready.copy(status = runtime.copy(stateKnown = false)).canChangeIntegration)
+                    assertFalse(ready.copy(safeMode = true).canSetIntegration(true))
+                    assertFalse(ready.showUpgradeIntegration)
+                }
+            }
+        }
+    }
+
+    @Test fun runtimeStatusCannotCreateOrRestoreFullIntegrationVerification() {
+        val runtime = KpmStatus(
+            supported = true, configuredEnabled = true, active = true, rebootRequired = false,
+            canConfigure = false, canEnable = false, canDisable = false, integrationVerified = false,
+        )
+        val fresh = KpmUiState(canPatchBoot = true).merge(KpmReport(runtime, emptyList(), statusQueried = true))
+        assertTrue(fresh.canLoad)
+        assertFalse(fresh.hasFreshIntegrationStatus)
+        assertFalse(fresh.canChangeIntegration)
+        val full = fresh.merge(KpmReport(runtime.copy(integrationVerified = true, canDisable = true), emptyList()))
+        assertTrue(full.canSetIntegration(false))
+        val failed = full.merge(KpmReport(error = BackendException("status", "failed"), statusQueried = true))
+        val recoveredRuntime = failed.merge(KpmReport(runtime, emptyList(), statusQueried = true))
+        assertTrue(recoveredRuntime.canLoad)
+        assertFalse(recoveredRuntime.canChangeIntegration)
+        assertFalse(recoveredRuntime.hasFreshIntegrationStatus)
+    }
+
+    @Test fun changedOrUnknownIntegrationStateInvalidatesCachedFullControls() {
+        val verified = KpmStatus(
+            supported = true, configuredEnabled = true, active = true, rebootRequired = false,
+            canConfigure = true, canEnable = true, canDisable = true,
+        )
+        val full = KpmUiState(canPatchBoot = true).merge(KpmReport(verified, emptyList()))
+        val runtime = verified.copy(
+            integrationVerified = false, canConfigure = false, canEnable = false, canDisable = false,
+        )
+        for (changed in listOf(
+            runtime.copy(configuredEnabled = false, rebootRequired = true),
+            runtime.copy(transitionFailed = true),
+            runtime.copy(stateKnown = false),
+        )) {
+            val refreshed = full.merge(KpmReport(changed, emptyList(), statusQueried = true))
+            assertFalse(refreshed.hasFreshIntegrationStatus)
+            assertFalse(refreshed.canChangeIntegration)
+            assertFalse(refreshed.canLoad)
+        }
+    }
+
+    @Test fun loadedRemovalRequiresTrueUnloadCapabilityButUnloadedFilesCanBeRemoved() {
+        val module = KpmModule("a", "A", "1", "", "", "", "hash", false, true, false, hasControl = true)
+        val legacy = KpmUiState().merge(KpmReport(
+            KpmStatus(true, true, true, false, canUnload = false), listOf(module),
+        ))
+        assertTrue(legacy.canLoad)
+        assertFalse(legacy.canUnload(module))
+        assertFalse(legacy.canRemove(module))
+        assertTrue(legacy.canRemove(module.copy(loaded = false)))
+        val current = legacy.merge(KpmReport(legacy.status!!.copy(canUnload = true), listOf(module)))
+        assertTrue(current.canUnload(module))
+        assertTrue(current.canRemove(module))
+        assertFalse(current.canRemove(module.copy(pendingUnload = true)))
+        assertFalse(current.copy(busy = true).canRemove(module))
     }
 
     @Test fun stateDistinguishesReadOffPendingActiveUnavailableAndFailure() {
@@ -211,6 +394,7 @@ class KpmProtocolTest {
             """{"supported":false,"can_configure":true,"configured_enabled":true,"active":true,"reboot_required":false,"upgrade_available":true}"""
         ))
         val state = KpmUiState(canPatchBoot = true).merge(KpmReport(status, emptyList()))
+        assertTrue(state.showUpgradeIntegration)
         assertTrue(state.canUpgradeIntegration)
         assertTrue(state.canSetIntegration(true))
         assertTrue(state.canSetIntegration(false))
@@ -219,8 +403,48 @@ class KpmProtocolTest {
         assertTrue(state.copy(safeMode = true).canSetIntegration(false))
         assertFalse(state.copy(busy = true).canSetIntegration(true))
         val current = state.copy(status = status.copy(upgradeAvailable = false))
+        assertFalse(current.showUpgradeIntegration)
         assertFalse(current.canUpgradeIntegration)
         assertFalse(current.canSetIntegration(true))
+    }
+
+    @Test fun updateRowOnlyReplacesAnEnabledOutdatedIntegrationAndDoesNotFlickerWhileBusy() {
+        for (enabled in listOf(false, true)) {
+            for (outdated in listOf(false, true)) {
+                val state = KpmUiState(canPatchBoot = true).merge(KpmReport(
+                    KpmStatus(
+                        supported = true, configuredEnabled = enabled, active = enabled,
+                        rebootRequired = false, canEnable = true, canDisable = true,
+                        upgradeAvailable = outdated,
+                    ), emptyList(),
+                ))
+                assertEquals(enabled && outdated, state.showUpgradeIntegration)
+                assertEquals(state.showUpgradeIntegration, state.copy(busy = true).showUpgradeIntegration)
+                assertEquals(enabled && outdated, state.canUpgradeIntegration)
+                assertFalse(state.copy(busy = true).canUpgradeIntegration)
+                assertFalse(state.copy(safeMode = true).canUpgradeIntegration)
+            }
+        }
+    }
+
+    @Test fun rebootAfterUpgradeRequiresAConfirmedFullStatusWithTheNewEngineStaged() {
+        val staged = KpmStatus(
+            supported = true, configuredEnabled = true, active = true,
+            rebootRequired = true, upgradeAvailable = false,
+        )
+        assertTrue(KpmReport(status = staged).verifiesIntegrationUpgrade)
+        for (unverified in listOf(
+            staged.copy(integrationVerified = false),
+            staged.copy(stateKnown = false),
+            staged.copy(configuredEnabled = false),
+            staged.copy(transitionFailed = true),
+            staged.copy(upgradeAvailable = true),
+            staged.copy(rebootRequired = false),
+        )) {
+            assertFalse(KpmReport(status = unverified).verifiesIntegrationUpgrade)
+        }
+        assertFalse(KpmReport().verifiesIntegrationUpgrade)
+        assertFalse(KpmReport(status = staged, error = BackendException("verify", "failed")).verifiesIntegrationUpgrade)
     }
 
     @Test fun exitFailureCannotBeHiddenBySuccessfulEnvelope() {
@@ -252,7 +476,7 @@ class KpmProtocolTest {
 
     @Test fun failedRefreshPreservesReadableStateButDisablesMutationsUntilFullRecovery() {
         val module = KpmModule("a", "A", "1", "author", "", "", "hash", false, true, false, hasControl = false)
-        val snapshot = KpmReport(KpmStatus(true, true, true, false), listOf(module))
+        val snapshot = KpmReport(KpmStatus(true, true, true, false, canUnload = true), listOf(module))
         val active = KpmUiState(canPatchBoot = true).merge(snapshot, module.id)
         assertTrue(active.canImport)
         assertTrue(active.canLoad)

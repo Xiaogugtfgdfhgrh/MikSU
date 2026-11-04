@@ -32,6 +32,10 @@ pub mod kpm_image {
         }))
     }
 
+    pub fn runtime_status(active: bool) -> Result<Value> {
+        transition_status(active)
+    }
+
     pub fn set_enabled(enabled: bool) -> Result<Value> {
         Ok(json!({ "configured_enabled": enabled, "reboot_required": true }))
     }

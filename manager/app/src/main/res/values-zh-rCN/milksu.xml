@@ -12,7 +12,7 @@
     <string name="kpm_dialog_title">KPModule</string>
     <string name="kpm_control_title">控制 KPModule</string>
     <string name="kpm_temporary_load">临时加载</string>
-    <string name="kpm_load_message">%1$s 将被加载。</string>
+    <string name="kpm_load_message">%1$s 将被安装。</string>
     <string name="kpm_unload_message">卸载 %1$s 模块？</string>
     <string name="kpm_author">作者：%1$s</string>
     <string name="kpm_parameter_value">参数：%1$s</string>
@@ -24,6 +24,7 @@
     <string name="kpm_unavailable">不可用</string>
     <string name="kpm_error">错误</string>
     <string name="kpm_integration">KPM 集成</string>
+    <string name="kpm_update_required">需要更新</string>
     <string name="kpm_integration_summary">默认关闭。更改时会更新当前启动镜像并保留可验证备份，完整重启设备后生效。导入 KPM 只登记，不自动加载或开启自启动。</string>
     <string name="kpm_full_reboot">完整重启设备</string>
     <string name="kpm_boot_confirm">完整重启设备以应用更新后的内核。软重启不会应用此变化。</string>
@@ -33,9 +34,9 @@
     <string name="kpm_pending_unload">待重启卸载</string>
     <string name="kpm_arguments">参数</string>
     <string name="kpm_autoload">开机加载</string>
-    <string name="kpm_load">加载</string>
+    <string name="kpm_load">安装</string>
     <string name="kpm_control">控制</string>
-    <string name="kpm_unload">卸载运行实例</string>
+    <string name="kpm_unload">卸载</string>
     <string name="kpm_remove">移除文件</string>
     <string name="kpm_root_required">需要匹配的 MilkSU 内核支持和 root 权限。</string>
     <string name="kpm_safe_mode">安全模式：加载操作已停用</string>

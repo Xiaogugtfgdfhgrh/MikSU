@@ -25,6 +25,7 @@ data class HomeUiState(
     val currentManagerVersionCode: Long,
     val systemInfo: SystemInfo,
     val susfsInfo: SusfsHomeInfo = SusfsHomeInfo(),
+    val bundledKernelVersionCode: Long = currentManagerVersionCode,
 ) {
     val isSELinuxPermissive: Boolean
         get() = systemInfo.selinuxStatus == "Permissive"
@@ -36,7 +37,7 @@ data class HomeUiState(
         get() = isManager &&
                 lkmMode == true &&
                 isLkmBundled &&
-                ksuVersion?.toLong() != currentManagerVersionCode &&
+                ksuVersion?.toLong() != bundledKernelVersionCode &&
                 !requiresNewKernel &&
                 !requiresNewManager
 

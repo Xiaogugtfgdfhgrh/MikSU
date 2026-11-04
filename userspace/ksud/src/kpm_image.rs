@@ -631,6 +631,38 @@ fn apply_configuration_status(
 }
 
 #[cfg(any(target_os = "android", test))]
+fn apply_runtime_configuration_status(
+    value: &mut Value,
+    state: Option<&IntegrationState>,
+    active: bool,
+    arm64: bool,
+    bundled_engine: Result<String>,
+) {
+    let enabled = state.is_some_and(|state| state.enabled);
+    let can_enable = arm64 && bundled_engine.is_ok() && (state.is_some() || !active);
+    let can_disable = state.is_some();
+    let configuration_error = bundled_engine
+        .as_ref()
+        .err()
+        .map(|error| format!("{error:#}"));
+    let bundled_engine = bundled_engine.ok();
+    let upgrade_available = state.is_some_and(|state| {
+        state.enabled
+            && bundled_engine
+                .as_ref()
+                .is_some_and(|digest| *digest != state.engine_sha256)
+    });
+    value["integration_verified"] = json!(false);
+    value["can_enable"] = json!(can_enable);
+    value["can_disable"] = json!(can_disable);
+    value["can_configure"] = json!(if enabled { can_disable } else { can_enable });
+    value["configuration_error"] = json!(configuration_error);
+    value["upgrade_available"] = json!(upgrade_available);
+    value["engine_sha256"] = json!(state.map(|state| &state.engine_sha256));
+    value["bundled_engine_sha256"] = json!(bundled_engine);
+}
+
+#[cfg(any(target_os = "android", test))]
 fn slot_state_name(slot: &str) -> Result<String> {
     ensure!(matches!(slot, "" | "_a" | "_b"), "invalid slot suffix");
     Ok(format!(
@@ -679,6 +711,34 @@ fn read_state() -> Result<Option<IntegrationState>> {
 #[cfg(target_os = "android")]
 pub fn configured_enabled() -> Result<bool> {
     Ok(read_state()?.is_some_and(|state| state.enabled))
+}
+
+#[cfg(target_os = "android")]
+pub fn runtime_status(active: bool) -> Result<Value> {
+    ensure!(
+        rustix::process::getuid().is_root(),
+        "KPM status requires root"
+    );
+    let state = read_state()?;
+    let same_boot = state.as_ref().is_some_and(|state| {
+        fs::read_to_string("/proc/sys/kernel/random/boot_id")
+            .is_ok_and(|id| id.trim() == state.boot_id)
+    });
+    let mut value = transition_value(
+        state.as_ref().map(|state| state.enabled),
+        active,
+        crate::kpm::engine_managed(),
+        same_boot,
+        ImageUpdate::from(state.as_ref().is_some_and(|state| state.reboot_pending)),
+    );
+    apply_runtime_configuration_status(
+        &mut value,
+        state.as_ref(),
+        active,
+        cfg!(target_arch = "aarch64"),
+        crate::assets::get_asset_data("kpimg").map(|data| sha256::digest(data.as_ref())),
+    );
+    Ok(value)
 }
 
 #[cfg(target_os = "android")]
@@ -1143,6 +1203,74 @@ mod tests {
             reboot_pending: false,
         };
         (source, state, original)
+    }
+
+    #[test]
+    fn runtime_update_notice_requires_enabled_integration_and_changed_engine() {
+        let directory = tempfile::tempdir().unwrap();
+        let (_, mut state, _) = legacy_integration(directory.path());
+        let engine = sha256::digest(b"new engine");
+        fs::remove_file(&state.original_kernel).unwrap();
+        for (enabled, installed, expected) in [
+            (true, String::new(), true),
+            (true, sha256::digest(b"old engine"), true),
+            (true, engine.clone(), false),
+            (false, sha256::digest(b"old engine"), false),
+        ] {
+            state.enabled = enabled;
+            state.engine_sha256 = installed;
+            let mut value =
+                transition_value(Some(enabled), true, true, false, ImageUpdate::Unchanged);
+            apply_runtime_configuration_status(
+                &mut value,
+                Some(&state),
+                true,
+                true,
+                Ok(engine.clone()),
+            );
+            assert_eq!(value["upgrade_available"], expected);
+            assert_eq!(value["integration_verified"], false);
+            assert_eq!(value["can_enable"], true);
+            assert_eq!(value["can_disable"], true);
+        }
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn runtime_status_cannot_authorize_unknown_active_engine() {
+        for active in [false, true] {
+            let mut value = transition_value(None, active, active, false, ImageUpdate::Unchanged);
+            apply_runtime_configuration_status(
+                &mut value,
+                None,
+                active,
+                true,
+                Ok(sha256::digest(b"engine")),
+            );
+            assert_eq!(value["state_known"], !active);
+            assert_eq!(value["can_enable"], !active);
+            assert_eq!(value["can_disable"], false);
+            assert_eq!(value["upgrade_available"], false);
+            assert_eq!(value["integration_verified"], false);
+        }
+    }
+
+    #[test]
+    fn runtime_status_keeps_disable_request_when_bundle_is_unavailable() {
+        let directory = tempfile::tempdir().unwrap();
+        let (_, state, _) = legacy_integration(directory.path());
+        let mut value = transition_value(Some(true), true, true, false, ImageUpdate::Unchanged);
+        apply_runtime_configuration_status(
+            &mut value,
+            Some(&state),
+            true,
+            true,
+            Err(anyhow::anyhow!("bundled engine missing")),
+        );
+        assert_eq!(value["can_enable"], false);
+        assert_eq!(value["can_disable"], true);
+        assert_eq!(value["upgrade_available"], false);
+        assert_eq!(value["integration_verified"], false);
     }
 
     #[test]

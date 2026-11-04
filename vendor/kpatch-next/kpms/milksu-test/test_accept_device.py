@@ -134,6 +134,19 @@ class DeviceRunnerTests(unittest.TestCase):
             self.device().stored("test-id")
         self.assertEqual(run.call_count, 1)
 
+    @patch("accept_device.subprocess.run")
+    def test_removed_fixture_requires_successful_absence_check(self, run):
+        run.return_value = subprocess.CompletedProcess([], 0, "", "")
+        self.device().removed("test-id")
+        command = shlex.split(shlex.split(run.call_args.args[0][-1])[2])
+        self.assertEqual(command, ["test", "!", "-e", "/data/adb/ksu/MilkSU/kpm/test-id.kpm"])
+
+    @patch("accept_device.subprocess.run")
+    def test_transport_failure_cannot_be_counted_as_removed(self, run):
+        run.return_value = subprocess.CompletedProcess([], 1, "", "adb: device not found")
+        with self.assertRaisesRegex(AcceptanceFailure, "not removed"):
+            self.device().removed("test-id")
+
 
 if __name__ == "__main__":
     unittest.main()

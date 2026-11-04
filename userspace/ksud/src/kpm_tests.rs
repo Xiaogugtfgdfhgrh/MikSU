@@ -143,6 +143,7 @@ struct MockEngine {
     controls: Cell<usize>,
     unloads: Cell<usize>,
     fail_load: Cell<bool>,
+    fail_unload: Cell<bool>,
     arguments: RefCell<Vec<String>>,
     probe_override: RefCell<Option<Probe>>,
 }
@@ -155,7 +156,7 @@ impl Engine for MockEngine {
             .unwrap_or_else(|| Probe {
                 active: true,
                 version: Some("0.13.5".into()),
-                capabilities: Some(runtime::REQUIRED_CAPABILITIES),
+                capabilities: Some(runtime::REQUIRED_CAPABILITIES | runtime::UNLOAD_CAPABILITY),
                 ..Probe::default()
             })
     }
@@ -196,9 +197,14 @@ impl Engine for MockEngine {
             .iter_mut()
             .find(|module| module.name == name)
             .unwrap();
-        module.pending_unload = true;
-        module.state = "pending-unload".into();
-        Err(failure("reboot_required", "Code remains resident"))
+        if self.fail_unload.get() {
+            module.pending_unload = true;
+            module.state = "pending-unload".into();
+            Err(failure("kernel_error", "exit failed"))
+        } else {
+            modules.retain(|module| module.name != name);
+            Ok(())
+        }
     }
 }
 
@@ -305,20 +311,58 @@ fn changed_content_never_reaches_kernel_loader() {
 }
 
 #[test]
-fn unload_and_remove_report_residency_and_keep_the_file() {
+fn failed_unload_keeps_the_file_and_reports_the_exit_error() {
     let root = tempfile::tempdir().unwrap();
     let engine = MockEngine::default();
     let mut backend = Backend::open(&root.path().join("state"), &engine, "boot-a".into()).unwrap();
     let id = import_fixture(&mut backend, root.path(), true);
     backend.load(&id, "").unwrap();
     backend.autoload(&id, true).unwrap();
+    engine.fail_unload.set(true);
     let result = backend.remove(&id);
-    assert_eq!(envelope(&result)["error"]["code"], "reboot_required");
+    assert_eq!(envelope(&result)["error"]["code"], "kernel_error");
     let info = backend.info(&id).unwrap();
     assert_eq!(info["loaded"], true);
     assert_eq!(info["pending_unload"], true);
     assert_eq!(info["autoload"], false);
     assert!(backend.store.path(&id).unwrap().is_file());
+}
+
+#[test]
+fn successful_unload_allows_immediate_reload_and_remove() {
+    let root = tempfile::tempdir().unwrap();
+    let engine = MockEngine::default();
+    let mut backend = Backend::open(&root.path().join("state"), &engine, "boot-a".into()).unwrap();
+    let id = import_fixture(&mut backend, root.path(), true);
+    backend.load(&id, "").unwrap();
+    backend.autoload(&id, true).unwrap();
+    let unloaded = backend.unload(&id).unwrap();
+    assert_eq!(unloaded["loaded"], false);
+    assert_eq!(unloaded["pending_unload"], false);
+    assert_eq!(unloaded["autoload"], false);
+    backend.load(&id, "reloaded").unwrap();
+    assert_eq!(backend.remove(&id).unwrap()["removed"], true);
+    assert!(engine.modules.borrow().is_empty());
+    assert!(!backend.store.path(&id).unwrap().exists());
+    assert!(backend.list().unwrap().as_array().unwrap().is_empty());
+}
+
+#[test]
+fn old_engine_requires_update_instead_of_claiming_unload_success() {
+    let root = tempfile::tempdir().unwrap();
+    let engine = MockEngine::default();
+    let mut backend = Backend::open(root.path(), &engine, "boot-a".into()).unwrap();
+    let id = import_fixture(&mut backend, root.path(), true);
+    backend.load(&id, "").unwrap();
+    engine.probe_override.replace(Some(Probe {
+        active: true,
+        capabilities: Some(runtime::REQUIRED_CAPABILITIES),
+        ..Probe::default()
+    }));
+    let result = backend.remove(&id);
+    assert_eq!(envelope(&result)["error"]["code"], "kernel_update_required");
+    assert_eq!(engine.unloads.get(), 0);
+    assert!(backend.store.path(&id).unwrap().exists());
 }
 
 #[test]
@@ -563,7 +607,7 @@ fn invalid_configuration_keeps_runtime_evidence_and_refuses_configuration() {
     });
     let status = status_value(&probe, &transition, true, true).unwrap();
     assert_eq!(status["runtime_supported"], true);
-    assert_eq!(status["capabilities"], 0x3f);
+    assert_eq!(status["capabilities"], 0x7f);
     assert_eq!(status["can_configure"], false);
     assert_eq!(status["state_known"], false);
     assert_eq!(status["reason"], transition["reason"]);

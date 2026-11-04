@@ -23,6 +23,7 @@ val androidSourceCompatibility = rootProject.extra["androidSourceCompatibility"]
 val androidTargetCompatibility = rootProject.extra["androidTargetCompatibility"] as JavaVersion
 val managerVersionCode = rootProject.extra["managerVersionCode"] as Int
 val managerVersionName = rootProject.extra["managerVersionName"] as String
+val bundledKernelVersionCode = rootProject.extra["bundledKernelVersionCode"] as Int
 
 val isPrBuild = project.findProperty("IS_PR_BUILD")?.toString()?.toBoolean() ?: false
 val defaultManagerPackageName = if (isPrBuild) "io.milksu.manager.pr" else "io.milksu.manager"
@@ -159,6 +160,7 @@ android {
         applicationId = managerPackageName
 
         buildConfigField("boolean", "IS_PR_BUILD", isPrBuild.toString())
+        buildConfigField("long", "BUNDLED_KERNEL_VERSION_CODE", "${bundledKernelVersionCode}L")
         buildConfigField("boolean", "CORE_UPDATE_ENABLED", coreUpdateEnabled.toString())
         buildConfigField("String", "MILKSU_UPDATE_URL", "\"${milkSuUpdateUrl.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
         resValue("string", "app_name", managerName)

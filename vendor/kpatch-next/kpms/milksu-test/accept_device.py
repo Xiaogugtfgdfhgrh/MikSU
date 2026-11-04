@@ -95,6 +95,10 @@ class Device:
             time.sleep(1)
         require(result.returncode == 0, "Stored fixture was unexpectedly removed")
 
+    def removed(self, module_id):
+        result = self.root(["test", "!", "-e", f"{STATE_ROOT}/{module_id}.kpm"])
+        require(result.returncode == 0, "Stored fixture was not removed")
+
 
 def require(condition, message):
     if not condition:
@@ -118,9 +122,9 @@ def run_acceptance(device, modules, report):
     require(
         status.get("supported") is True and status.get("active") is True
         and status.get("configured_enabled") is True
-        and status.get("provider") == "milksu",
+        and status.get("provider") == "milksu" and status.get("can_unload") is True,
         "An active, configured, supported MilkSU engine is required; "
-        "a foreign engine or pending reboot is not accepted",
+        "with real unload support; a foreign engine or pending reboot is not accepted",
     )
     existing = device.kpm("list")["data"]
     require(isinstance(existing, list), "list data must be an array")
@@ -181,8 +185,8 @@ def run_acceptance(device, modules, report):
     device.kpm("load", ids["init_error"], "--args", "expect-init-error",
                ok=False, code="kernel_error")
     info = device.kpm("info", ids["init_error"])["data"]
-    check(report, "init_error: failed init stays resident and reports error",
-          info["loaded"] is True and info["pending_unload"] is True
+    check(report, "init_error: successful exit cleans up failed init and reports error",
+          info["loaded"] is False and info["pending_unload"] is False
           and bool(info["last_error"]) and info["autoload"] is False)
     device.stored(ids["init_error"])
     check(report, "init_error: stored file retained", True)
@@ -197,27 +201,38 @@ def run_acceptance(device, modules, report):
     check(report, "exit_error: stored file retained", True)
 
     for key in ("echo", "no_ctl0"):
-        device.kpm("unload", ids[key], ok=False, code="reboot_required")
+        device.kpm("unload", ids[key])
         info = device.kpm("info", ids[key])["data"]
-        check(report, f"{key}: completed exit reports resident/pending reboot",
-              info["loaded"] is True and info["pending_unload"] is True
+        check(report, f"{key}: completed exit removes the runtime instance immediately",
+              info["loaded"] is False and info["pending_unload"] is False
               and info["autoload"] is False)
         device.stored(ids[key])
+        device.kpm("load", ids[key], "--args", "reload-after-unload")
+        check(report, f"{key}: unloaded module can reload in the same boot",
+              device.kpm("info", ids[key])["data"]["loaded"] is True)
+        device.kpm("remove", ids[key])
+        device.removed(ids[key])
+        check(report, f"{key}: remove unloads and deletes its stored file", True)
 
-    device.kpm("remove", ids["echo"], ok=False, code="reboot_required")
-    device.stored(ids["echo"])
-    check(report, "remove: resident fixture is not falsely removed", True)
+    device.kpm("remove", ids["init_error"])
+    device.removed(ids["init_error"])
+    check(report, "init_error: nonresident failed module can be removed immediately", True)
+    device.kpm("remove", ids["exit_error"], ok=False, code="kernel_error")
+    device.stored(ids["exit_error"])
+    check(report, "exit_error: pending failed exit preserves its file", True)
     final = device.kpm("list")["data"]
     fixtures = [item for item in final if item["id"] in ids.values()]
-    check(report, "all four remain visible, resident, pending, autoload off",
-          len(fixtures) == 4 and all(
+    check(report, "only the failed-exit fixture remains resident and pending",
+          len(fixtures) == 1 and fixtures[0]["id"] == ids["exit_error"] and all(
               item["loaded"] is True and item["pending_unload"] is True
               and item["autoload"] is False for item in fixtures
           ))
+    check(report, "pre-existing modules remain unchanged",
+          [item for item in final if item["id"] not in ids.values()] == existing)
     report["final_modules"] = fixtures
     report["cleanup"] = (
-        "No cleanup or reboot performed. The main agent must reboot, verify "
-        "residency ended, then remove only the listed fixture IDs."
+        "The failed-exit fixture requires a reboot to end residency. After "
+        "reboot, remove only its listed fixture ID; the other fixtures were removed."
     )
 
 

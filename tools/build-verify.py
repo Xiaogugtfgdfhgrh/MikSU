@@ -23,7 +23,8 @@ def main() -> None:
     release = configparser.ConfigParser(interpolation=None)
     release.read_string("[release]\n" + (root / "version.properties").read_text())
     version_name = release["release"]["MILKSU_VERSION_NAME"]
-    version_code = release["release"].getint("MILKSU_VERSION_CODE")
+    version_code = release["release"].getint(
+        "MILKSU_MANAGER_VERSION_CODE", fallback=release["release"].getint("MILKSU_VERSION_CODE"))
     verifier = (root / "kernel/manager/apk_sign.c").read_text()
     limit = re.search(r"#define\s+CERT_MAX_LENGTH\s+(\d+)", verifier)
     if limit and certificate["certificate_size"] > int(limit.group(1)):

@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.union
@@ -24,6 +25,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerDefaults.flingBehavior
 import androidx.compose.foundation.pager.PagerDefaults.pageNestedScrollConnection
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.focusGroup
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -43,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.Density
@@ -310,6 +313,9 @@ fun MainScreen(
     }
     val destination = MainTab.destination(selectedTab, tabs)
     val tabStates = rememberSaveableStateHolder()
+    LaunchedEffect(integrationViewModel) {
+        integrationViewModel.prewarmIntegration()
+    }
     LifecycleResumeEffect(Unit) {
         integrationViewModel.refresh(includeSusfs = true)
         onPauseOrDispose { }
@@ -471,17 +477,21 @@ private fun MainScreenContent(
                     ),
                 ) { page ->
                     val isCurrentPage = page == settledPage
-                    tabStates.SaveableStateProvider(tabs[page].name) {
-                        when (tabs[page]) {
-                            MainTab.HOME -> if (contentReady || isCurrentPage) HomePager(navController, bottomInnerPadding, isCurrentPage)
-                            MainTab.KPM -> if (contentReady || isCurrentPage) KpmPager(bottomInnerPadding, isCurrentPage)
-                            MainTab.SUPERUSER -> if (contentReady || isCurrentPage) {
-                                if (isFullFeatured) SuperUserPager(navController, bottomInnerPadding, isCurrentPage) else RootUnavailableContent()
+                    Box(Modifier.fillMaxSize().focusProperties {
+                        onEnter = { if (!isCurrentPage) cancelFocusChange() }
+                    }.focusGroup()) {
+                        tabStates.SaveableStateProvider(tabs[page].name) {
+                            when (tabs[page]) {
+                                MainTab.HOME -> if (contentReady || isCurrentPage) HomePager(navController, bottomInnerPadding, isCurrentPage)
+                                MainTab.KPM -> if (contentReady || isCurrentPage) KpmPager(bottomInnerPadding, isCurrentPage)
+                                MainTab.SUPERUSER -> if (contentReady || isCurrentPage) {
+                                    if (isFullFeatured) SuperUserPager(navController, bottomInnerPadding, isCurrentPage) else RootUnavailableContent()
+                                }
+                                MainTab.MODULE -> if (contentReady || isCurrentPage) {
+                                    if (isFullFeatured) ModulePager(bottomInnerPadding, isCurrentPage) else RootUnavailableContent()
+                                }
+                                MainTab.SETTINGS -> if (contentReady || isCurrentPage) SettingPager(navController, bottomInnerPadding, isCurrentPage)
                             }
-                            MainTab.MODULE -> if (contentReady || isCurrentPage) {
-                                if (isFullFeatured) ModulePager(bottomInnerPadding, isCurrentPage) else RootUnavailableContent()
-                            }
-                            MainTab.SETTINGS -> if (contentReady || isCurrentPage) SettingPager(navController, bottomInnerPadding, isCurrentPage)
                         }
                     }
                 }

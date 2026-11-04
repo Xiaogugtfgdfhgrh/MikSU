@@ -175,6 +175,17 @@ impl Probe {
         }
     }
 
+    fn runtime_supported(&self) -> bool {
+        protocol::runtime_supported(
+            self.version.as_deref(),
+            &self.features,
+            self.load_error,
+            self.restore_error,
+            self.stopping,
+            self.unload_ready,
+        )
+    }
+
     fn reason(&self) -> Option<String> {
         if self.supported() {
             return None;
@@ -563,13 +574,15 @@ pub fn status_json() -> Result<Value> {
         Some(kmi) => Some(kmi),
         None => get_config(FALLBACK_KMI_KEY).context("Cannot read SUSFS fallback KMI config")?,
     };
-    let reason = probe.reason();
+    let supported = probe.runtime_supported();
+    let reason = if supported { None } else { probe.reason() };
     Ok(json!({
-        "supported": probe.supported(),
-        "loaded": probe.module_present,
+        "supported": supported,
+        "loaded": probe.module_present || (supported && probe.provider != Provider::Builtin),
         "builtin": probe.provider == Provider::Builtin,
         "autoload": autoload,
         "version": probe.version,
+        "variant": probe.variant,
         "kmi": kmi,
         "reason": reason,
     }))

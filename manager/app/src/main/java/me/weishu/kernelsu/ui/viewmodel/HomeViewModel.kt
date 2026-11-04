@@ -18,15 +18,12 @@ import me.weishu.kernelsu.BuildConfig
 import me.weishu.kernelsu.Natives
 import me.weishu.kernelsu.data.repository.SettingsRepository
 import me.weishu.kernelsu.data.repository.SettingsRepositoryImpl
-import me.weishu.kernelsu.data.system.SystemBackends
 import me.weishu.kernelsu.getKernelVersion
 import me.weishu.kernelsu.ksuApp
 import me.weishu.kernelsu.ui.screen.home.HomeUiState
 import me.weishu.kernelsu.ui.screen.home.HomeManagerUpdates
 import me.weishu.kernelsu.ui.screen.home.SystemInfo
-import me.weishu.kernelsu.ui.screen.home.SusfsHomeInfo
-import me.weishu.kernelsu.ui.screen.home.SusfsHomeInfoQuery
-import me.weishu.kernelsu.ui.screen.home.SusfsHomeSnapshot
+import me.weishu.kernelsu.ui.screen.home.SusfsHomeCache
 import me.weishu.kernelsu.ui.screen.home.getManagerVersion
 import me.weishu.kernelsu.ui.screen.home.susfsHomeSnapshots
 import me.weishu.kernelsu.ui.screen.kpm.KpmUiState
@@ -41,15 +38,19 @@ class HomeViewModel(
 ) : ViewModel() {
 
     private val integrationPreferences = ksuApp.getSharedPreferences("system_integration", Context.MODE_PRIVATE)
-    private val susfsInfoQuery = SusfsHomeInfoQuery(SystemBackends.executor)
     private val susfsRefreshRequests = MutableStateFlow(0)
     private var susfsObserver: Job? = null
     private var refreshJob: Job? = null
     private val _uiState = MutableStateFlow(
         buildState().copy(
-            susfsInfo = SusfsHomeInfo(
-                integrationEnabled = integrationPreferences.getBoolean("home_susfs_enabled", false),
-            ),
+            susfsInfo = SusfsHomeCache(
+                available = integrationPreferences.getBoolean(SusfsHomeCache.AVAILABLE_KEY, false),
+                version = integrationPreferences.getString(SusfsHomeCache.VERSION_KEY, null),
+                variant = integrationPreferences.getString(SusfsHomeCache.VARIANT_KEY, null),
+                builtin = if (integrationPreferences.contains(SusfsHomeCache.BUILTIN_KEY)) {
+                    integrationPreferences.getBoolean(SusfsHomeCache.BUILTIN_KEY, false)
+                } else null,
+            ).restore(integrationPreferences.getBoolean("home_susfs_enabled", false)),
         ),
     )
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
@@ -94,10 +95,16 @@ class HomeViewModel(
         susfsObserver = viewModelScope.launch {
             susfsHomeSnapshots(integrationState, susfsRefreshRequests).collectLatest { snapshot ->
                 _uiState.update { it.copy(susfsInfo = it.susfsInfo.merge(snapshot)) }
-                if (snapshot.operational) {
-                    val variant = withContext(Dispatchers.IO) { susfsInfoQuery.variant() }
-                    if (SusfsHomeSnapshot.from(integrationState.value) == snapshot) {
-                        _uiState.update { it.copy(susfsInfo = it.susfsInfo.copy(variant = variant)) }
+                if (snapshot.confirmed) {
+                    val cache = SusfsHomeCache.from(_uiState.value.susfsInfo)
+                    integrationPreferences.edit().apply {
+                        putBoolean(SusfsHomeCache.AVAILABLE_KEY, cache.available)
+                        putString(SusfsHomeCache.VERSION_KEY, cache.version)
+                        putString(SusfsHomeCache.VARIANT_KEY, cache.variant)
+                        cache.builtin?.let {
+                            putBoolean(SusfsHomeCache.BUILTIN_KEY, it)
+                        } ?: remove(SusfsHomeCache.BUILTIN_KEY)
+                        apply()
                     }
                 }
             }
@@ -132,9 +139,10 @@ class HomeViewModel(
             checkUpdateEnabled = settingsRepo.checkUpdate,
             latestVersionInfo = LatestVersionInfo(),
             currentManagerVersionCode = managerVersion.versionCode,
+            bundledKernelVersionCode = BuildConfig.BUNDLED_KERNEL_VERSION_CODE,
             systemInfo = SystemInfo(
                 kernelVersion = Os.uname().release,
-                managerVersion = "${managerVersion.versionName} (${managerVersion.versionCode}-${managerUAPIVersion})",
+                managerVersion = "${managerVersion.versionName} (${ksuVersion ?: BuildConfig.BUNDLED_KERNEL_VERSION_CODE}-${managerUAPIVersion})",
                 deviceModel = resolveDeviceName(),
                 fingerprint = Build.FINGERPRINT,
                 selinuxStatus = getSELinuxStatusRaw(),

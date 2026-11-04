@@ -1,13 +1,10 @@
 package me.weishu.kernelsu.ui.screen.home
 
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
-import me.weishu.kernelsu.data.system.CommandExecutor
-import me.weishu.kernelsu.data.system.SusfsProtocol
 import me.weishu.kernelsu.ui.screen.kpm.KpmUiState
 import me.weishu.kernelsu.ui.screen.kpm.SusfsState
 
@@ -42,40 +39,56 @@ data class SusfsHomeSnapshot(
     }
 }
 
+enum class SusfsAvailability { Unknown, Available, Unavailable }
+
 data class SusfsHomeInfo(
     val integrationEnabled: Boolean = false,
-    val supported: Boolean = false,
+    val availability: SusfsAvailability = SusfsAvailability.Unknown,
     val version: String? = null,
     val variant: String? = null,
+    val builtin: Boolean? = null,
 ) {
+    val supported: Boolean
+        get() = availability == SusfsAvailability.Available
+
     fun merge(snapshot: SusfsHomeSnapshot): SusfsHomeInfo {
-        val enabled = if (snapshot.confirmed) snapshot.integrationEnabled else integrationEnabled
-        if (!snapshot.operational) return SusfsHomeInfo(integrationEnabled = enabled)
+        if (!snapshot.confirmed) {
+            return if (availability == SusfsAvailability.Unavailable) {
+                copy(availability = SusfsAvailability.Unknown)
+            } else this
+        }
+        if (!snapshot.integrationEnabled) return SusfsHomeInfo()
+        if (snapshot.state.supported == false) {
+            return SusfsHomeInfo(
+                integrationEnabled = true,
+                availability = SusfsAvailability.Unavailable,
+            )
+        }
+        if (!snapshot.operational) return SusfsHomeInfo(integrationEnabled = true)
 
         val nextVersion = runtimeValue(snapshot.state.version)
+        val sameProvider = supported && version == nextVersion && builtin == snapshot.state.builtin
         return SusfsHomeInfo(
-            integrationEnabled = enabled,
-            supported = true,
+            integrationEnabled = true,
+            availability = SusfsAvailability.Available,
             version = nextVersion,
-            variant = variant.takeIf { supported && version == nextVersion },
+            variant = runtimeValue(snapshot.state.variant) ?: variant.takeIf { sameProvider },
+            builtin = snapshot.state.builtin,
         )
     }
 
+    fun summary(supportedLabel: String, unavailableLabel: String, unknownLabel: String): String =
+        when (availability) {
+            SusfsAvailability.Unknown -> unknownLabel
+            SusfsAvailability.Unavailable -> unavailableLabel
+            SusfsAvailability.Available ->
+                "$supportedLabel | ${version ?: unknownLabel} (${variant ?: unknownLabel})"
+        }
+
     companion object {
-        fun runtimeValue(value: String): String? = value.trim().takeIf {
+        fun runtimeValue(value: String?): String? = value?.trim()?.takeIf {
             it.isNotEmpty() && it.length <= 128 && it.none(Char::isISOControl) &&
                 it.lowercase() !in setOf("unknown", "unavailable", "unsupported", "n/a", "null")
         }
-    }
-}
-
-class SusfsHomeInfoQuery(private val executor: CommandExecutor) {
-    suspend fun variant(): String? = try {
-        val output = SusfsProtocol.checkCommand(executor.execute(listOf("susfs", "variant")))
-        SusfsHomeInfo.runtimeValue(output.stdout)
-    } catch (error: CancellationException) {
-        throw error
-    } catch (_: Exception) {
-        null
     }
 }

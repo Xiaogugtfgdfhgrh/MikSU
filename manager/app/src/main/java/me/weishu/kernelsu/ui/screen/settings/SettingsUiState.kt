@@ -88,4 +88,5 @@ data class SettingsScreenActions(
     val onOpenAbout: () -> Unit,
     val onSetKpmIntegration: (Boolean) -> Unit = {},
     val onSetSusfsAutoload: (Boolean) -> Unit = {},
+    val onUpgradeKpmIntegration: () -> Unit = {},
 )

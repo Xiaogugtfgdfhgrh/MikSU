@@ -560,6 +560,20 @@ static struct module *find_module_locked(const char *name)
     return 0;
 }
 
+static void release_module(struct module *mod)
+{
+    list_del(&mod->list);
+    struct control_argument *argument = mod->ctl_history;
+    while (argument) {
+        struct control_argument *next = argument->next;
+        kvfree(argument);
+        argument = next;
+    }
+    if (mod->args) kvfree(mod->args);
+    kp_free_exec(mod->start);
+    kvfree(mod);
+}
+
 long load_module(const void *data, int len, const char *args, const char *event, void *__user reserved)
 {
     if (!data || len < 0 || !event) return -EINVAL;
@@ -651,8 +665,7 @@ long load_module(const void *data, int len, const char *args, const char *event,
         mod->exit_error = (*mod->exit)(reserved);
         logki("KPM_LOAD checkpoint=failed-init-exit-returned rc=%ld\n", mod->exit_error);
         if (mod->exit_error) mod->last_error = mod->exit_error;
-        /* init may already have published pointers; even a successful exit
-         * cannot prove that arbitrary KPM-owned callbacks have drained. */
+        if (!mod->exit_error) release_module(mod);
         goto out;
     }
 
@@ -680,7 +693,10 @@ long unload_module(const char *name, void *__user reserved)
             mod->exit_error = mod->exit && *mod->exit ? (*mod->exit)(reserved) : -ENOSYS;
         }
         mod->last_error = mod->exit_error ? mod->exit_error : mod->init_error;
-        rc = mod->exit_error < 0 ? mod->exit_error : mod->exit_error ? -EIO : -EINPROGRESS;
+        rc = mod->exit_error < 0 ? mod->exit_error : mod->exit_error ? -EIO : 0;
+        /* Successful exit completes the module's hook/work teardown.
+         * The gate excludes concurrent loader and control callbacks. */
+        if (!rc) release_module(mod);
     }
     module_leave();
     return rc;
@@ -782,8 +798,7 @@ long module_control0(const char *name, const char *ctl_args, char *__user out_ms
     argument->next = mod->ctl_history;
     mod->ctl_history = argument;
     mod->ctl_count++;
-    /* A module may retain its control string in a callback, so keep every
-     * submitted string until reboot, just like the executable allocation. */
+    /* A module may retain control strings until its exit callback completes. */
     mod->ctl_args = argument->text;
 
     rc = (*mod->ctl0)(mod->ctl_args, out_msg, outlen);

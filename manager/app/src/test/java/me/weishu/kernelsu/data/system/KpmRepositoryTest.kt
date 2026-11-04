@@ -16,7 +16,7 @@ class KpmRepositoryTest {
     private fun failed() = CommandOutput(1,
         """{"ok":false,"data":null,"error":{"code":"kernel_error","message":"failed"}}""", "")
 
-    @Test fun importOnlyRegistersAndAlwaysRequeries() = runBlocking {
+    @Test fun importOnlyRegistersAndRequeriesWithoutBootVerification() = runBlocking {
         val calls = mutableListOf<List<String>>()
         val repository = KpmRepository { args ->
             calls += args
@@ -26,8 +26,63 @@ class KpmRepositoryTest {
         assertNull(report.error)
         assertEquals("a", report.detail?.id)
         assertFalse(report.detail!!.loaded)
-        assertEquals(listOf("import", "status", "list"), calls.map { it[1] })
+        assertEquals(listOf("import", "list"), calls.map { it[1] })
+        assertNull(report.status)
+        assertFalse(report.statusQueried)
         assertFalse(calls.any { it.contains("load") || it.contains("autoload") })
+    }
+
+    @Test fun documentImportChecksRegistryAndNewnessWithoutAnyStatusQuery() = runBlocking {
+        for (alreadyRegistered in listOf(false, true)) {
+            val calls = mutableListOf<List<String>>()
+            var imported = alreadyRegistered
+            val repository = KpmRepository { args ->
+                calls += args
+                when (args[1]) {
+                    "list" -> ok(if (imported) "[${module()}]" else "[]")
+                    "import" -> { imported = true; ok(module()) }
+                    else -> error("Import must not inspect the boot image")
+                }
+            }
+            val result = repository.importModule("/private/a.kpm")
+            assertNull(result.report.error)
+            assertEquals(!alreadyRegistered, result.isNew)
+            assertEquals("a", result.report.detail?.id)
+            assertEquals(listOf(
+                listOf("kpm", "list"),
+                listOf("kpm", "import", "/private/a.kpm"),
+                listOf("kpm", "list"),
+            ), calls)
+        }
+    }
+
+    @Test fun unreadableRegistryDoesNotStartDocumentImport() = runBlocking {
+        val calls = mutableListOf<List<String>>()
+        val repository = KpmRepository { args ->
+            calls += args
+            failed()
+        }
+        val result = repository.importModule("/private/a.kpm")
+        assertEquals("kernel_error", result.report.error?.code)
+        assertFalse(result.isNew)
+        assertNull(result.report.detail)
+        assertEquals(listOf(listOf("kpm", "list")), calls)
+    }
+
+    @Test fun refreshUsesRuntimeStatusUnlessFullVerificationIsRequested() = runBlocking {
+        val calls = mutableListOf<List<String>>()
+        val repository = KpmRepository { args ->
+            calls += args
+            when (args[1]) { "status" -> ok(status); "list" -> ok("[]"); else -> error("Unexpected command") }
+        }
+        val runtime = repository.refresh()
+        assertFalse(runtime.status!!.integrationVerified)
+        assertTrue(runtime.statusQueried)
+        assertEquals(listOf(listOf("kpm", "status", "--runtime-only"), listOf("kpm", "list")), calls)
+        calls.clear()
+        val full = repository.refresh(runtimeOnly = false)
+        assertTrue(full.status!!.integrationVerified)
+        assertEquals(listOf(listOf("kpm", "status"), listOf("kpm", "list")), calls)
     }
 
     @Test fun mutationFailureStillRequeriesAndPreservesOriginalError() = runBlocking {
@@ -45,6 +100,46 @@ class KpmRepositoryTest {
         assertEquals("busy", report.error?.code)
         assertNotNull(report.status)
         assertNotNull(report.modules)
+    }
+
+    @Test fun removalIsOnlySuccessfulAfterTheModuleDisappearsFromTheRegistry() = runBlocking {
+        for (removed in listOf(false, true)) {
+            val calls = mutableListOf<List<String>>()
+            val repository = KpmRepository { args ->
+                calls += args
+                when (args[1]) {
+                    "remove" -> ok("""{"id":"a","removed":true}""")
+                    "status" -> ok(activeStatus)
+                    "list" -> ok(if (removed) "[]" else "[${module(loaded = true)}]")
+                    else -> error("The daemon handles unload and removal in one command")
+                }
+            }
+            val report = repository.mutate(listOf("kpm", "remove", "a"))
+            assertEquals(if (removed) null else "unconfirmed_remove", report.error?.code)
+            assertEquals(listOf(
+                listOf("kpm", "remove", "a"),
+                listOf("kpm", "status", "--runtime-only"),
+                listOf("kpm", "list"),
+            ), calls)
+        }
+    }
+
+    @Test fun failedUnloadPreservesTheActualErrorAndRegisteredModuleForRetry() = runBlocking {
+        val message = "Update KPM integration in Settings and reboot to enable unloading"
+        val repository = KpmRepository { args ->
+            when (args[1]) {
+                "remove" -> CommandOutput(1,
+                    """{"ok":false,"data":null,"error":{"code":"kernel_update_required","message":"$message"}}""", "")
+                "status" -> ok(activeStatus)
+                "list" -> ok("[${module(loaded = true, autoload = true)}]")
+                else -> error("The manager must not remove the file after unload fails")
+            }
+        }
+        val report = repository.mutate(listOf("kpm", "remove", "a"))
+        assertEquals("kernel_update_required", report.error?.code)
+        assertEquals(message, report.error?.message)
+        assertEquals("a", report.modules!!.single().id)
+        assertTrue(report.modules.single().loaded)
     }
 
     @Test fun integrationChangesUseRequeriedStateInsteadOfMutationReply() = runBlocking {
@@ -90,6 +185,27 @@ class KpmRepositoryTest {
             assertEquals(!enabled, report.status.active)
             assertTrue(report.status.rebootRequired)
             assertNotNull(report.modules)
+        }
+    }
+
+    @Test fun upgradeRebootGateUsesFullRequeriedStateInsteadOfTheEnableReply() = runBlocking {
+        for (staged in listOf(false, true)) {
+            val calls = mutableListOf<List<String>>()
+            val repository = KpmRepository { args ->
+                calls += args
+                when (args[1]) {
+                    "integration" -> ok("""{"configured_enabled":true,"reboot_required":true,"upgrade_available":false}""")
+                    "status" -> ok("""{"supported":true,"configured_enabled":true,"active":true,"reboot_required":$staged,"upgrade_available":${!staged},"integration_verified":true}""")
+                    "list" -> ok("[]")
+                    else -> error("Unexpected command")
+                }
+            }
+            val report = repository.mutate(listOf("kpm", "integration", "enable"))
+            assertNull(report.error)
+            assertEquals(staged, report.verifiesIntegrationUpgrade)
+            assertEquals(listOf(
+                listOf("kpm", "integration", "enable"), listOf("kpm", "status"), listOf("kpm", "list"),
+            ), calls)
         }
     }
 
@@ -174,7 +290,7 @@ class KpmRepositoryTest {
             assertEquals("already_loaded", report.error?.code)
             assertEquals("a", report.detail?.id)
             assertTrue(report.modules!!.single().loaded)
-            assertEquals(listOf("import", "status", "list"), calls)
+            assertEquals(listOf("import", "list"), calls)
         }
     }
 
@@ -195,9 +311,10 @@ class KpmRepositoryTest {
             }
             val report = repository.loadImported("a", "literal args", temporary)
             assertNull(report.error)
-            assertEquals(listOf("status", "list", "load", "status", "list", "autoload", "status", "list"), calls.map { it[1] })
+            assertEquals(listOf("status", "list", "load", "autoload", "status", "list"), calls.map { it[1] })
+            assertEquals(2, calls.count { it == listOf("kpm", "status", "--runtime-only") })
             assertEquals(listOf("kpm", "load", "a", "--args", "literal args"), calls[2])
-            assertEquals(if (temporary) "disable" else "enable", calls[5][3])
+            assertEquals(if (temporary) "disable" else "enable", calls[3][3])
             assertEquals(!temporary, report.modules!!.single().autoload)
             assertTrue(report.modules.single().loaded)
         }
@@ -256,6 +373,58 @@ class KpmRepositoryTest {
             assertEquals(if (pending) "reboot_required" else "engine_inactive", report.error?.code)
             assertEquals(listOf("status", "list"), calls)
         }
+    }
+
+    @Test fun unknownIntegrationStateNeverLoadsEvenWithAnActiveEngine() = runBlocking {
+        val calls = mutableListOf<List<String>>()
+        val repository = KpmRepository { args ->
+            calls += args
+            when (args[1]) {
+                "status" -> ok("""{"supported":true,"configured_enabled":true,"active":true,"reboot_required":false,"state_known":false,"integration_verified":false}""")
+                "list" -> ok("[${module()}]")
+                else -> error("Unknown integration state must not load")
+            }
+        }
+        val report = repository.loadImported("a", "", false)
+        assertEquals("engine_inactive", report.error?.code)
+        assertEquals(listOf(listOf("kpm", "status", "--runtime-only"), listOf("kpm", "list")), calls)
+    }
+
+    @Test fun mismatchedOrPendingLoadReplyNeverEnablesAutoloadAndStillRequeries() = runBlocking {
+        for (differentId in listOf(false, true)) {
+            val calls = mutableListOf<String>()
+            val repository = KpmRepository { args ->
+                calls += args[1]
+                when (args[1]) {
+                    "status" -> ok(activeStatus)
+                    "list" -> ok("[${module()}]")
+                    "load" -> ok(if (differentId) module(loaded = true).replace("\"a\"", "\"other\"") else module(loaded = true, pending = true))
+                    else -> error("Unconfirmed module must not change autoload")
+                }
+            }
+            val report = repository.loadImported("a", "", false)
+            assertEquals(if (differentId) "invalid_data" else "unconfirmed_load", report.error?.code)
+            assertEquals(listOf("status", "list", "load", "status", "list"), calls)
+        }
+    }
+
+    @Test fun failedFinalRuntimeQueryDoesNotReportAConfirmedLoad() = runBlocking {
+        var queries = 0
+        var loaded = false
+        val repository = KpmRepository { args ->
+            when (args[1]) {
+                "status" -> if (queries++ == 0) ok(activeStatus) else failed()
+                "list" -> ok("[${module(loaded, loaded)}]")
+                "load" -> { loaded = true; ok(module(loaded)) }
+                "autoload" -> ok(module(true, true))
+                else -> error("Unexpected command")
+            }
+        }
+        val report = repository.loadImported("a", "", false)
+        assertEquals("kernel_error", report.error?.code)
+        assertNull(report.status)
+        assertTrue(report.modules!!.single().loaded)
+        assertTrue(report.statusQueried)
     }
 
     @Test fun unconfirmedLoadOrAutoloadDoesNotReportSuccess() = runBlocking {

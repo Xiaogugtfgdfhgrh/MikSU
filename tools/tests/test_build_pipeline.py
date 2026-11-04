@@ -168,6 +168,16 @@ class BuildVerifyTests(TemporaryAssets):
         self.put("out/" + ASSET_PATHS["kptools"], elf("stale-tool"))
         self.assert_asset_rejected("kptools")
 
+    def test_manager_update_can_keep_the_bundled_kernel_version(self):
+        self.put("version.properties",
+                 b"MILKSU_VERSION_NAME=0.2.1\nMILKSU_VERSION_CODE=32800\n"
+                 b"MILKSU_MANAGER_VERSION_CODE=32801\n")
+        self.badging = self.badging.replace("32800", "32801").replace("0.2.0", "0.2.1")
+        self.verify()
+        manifest = self.read_json("out/manifests/final-apk.json")
+        self.assertEqual(manifest["version_name"], "0.2.1")
+        self.assertEqual(manifest["version_code"], 32801)
+
     def test_formal_release_rejects_undeclared_or_development_signing(self):
         self.environment["MILKSU_REQUIRE_RELEASE_SIGNING"] = "1"
         for profile, development in ((None, None), ("development", True),

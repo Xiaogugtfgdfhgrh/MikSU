@@ -22,7 +22,10 @@ const STATE_ROOT: &str = "/data/adb/ksu/MilkSU/kpm";
 
 #[derive(Debug, Subcommand)]
 pub enum KpmCommand {
-    Status,
+    Status {
+        #[arg(long)]
+        runtime_only: bool,
+    },
     List,
     Import {
         path: PathBuf,
@@ -160,11 +163,15 @@ pub fn avc_conflict() -> bool {
     NativeEngine.probe().avc_conflict()
 }
 
-fn status() -> Result<Value> {
+fn status(runtime_only: bool) -> Result<Value> {
     let probe = NativeEngine.probe();
     let root = unsafe { libc::getuid() } == 0;
     let transition = if root {
-        crate::kpm_image::transition_status(probe.active)?
+        if runtime_only {
+            crate::kpm_image::runtime_status(probe.active)?
+        } else {
+            crate::kpm_image::transition_status(probe.active)?
+        }
     } else {
         // The state directory is root-only; report unavailable without treating
         // its expected EACCES as a failed integration transition.
@@ -236,6 +243,8 @@ fn status_value(
     Ok(json!({
         "supported": supported,
         "runtime_supported": runtime_supported,
+        "can_unload": probe.can_unload(),
+        "integration_verified": transition.get("integration_verified").and_then(Value::as_bool).unwrap_or(true),
         "can_configure": can_configure,
         "can_enable": arm64_android && root && transition.get("can_enable").and_then(Value::as_bool).unwrap_or(can_configure),
         "can_disable": arm64_android && root && transition.get("can_disable").and_then(Value::as_bool).unwrap_or(can_configure),
@@ -324,7 +333,7 @@ impl<'a, E: Engine> Backend<'a, E> {
                 if module.last_error.is_some() {
                     record.last_error.clone_from(&module.last_error);
                 }
-            } else if record.pending_boot_id != self.boot_id {
+            } else {
                 record.pending_unload = false;
                 record.pending_boot_id.clear();
             }
@@ -505,7 +514,15 @@ impl<'a, E: Engine> Backend<'a, E> {
     }
 
     fn unload(&mut self, id: &str) -> Result<Value> {
-        require_engine(&self.engine.probe())?;
+        let probe = self.engine.probe();
+        require_engine(&probe)?;
+        ensure!(
+            probe.can_unload(),
+            failure(
+                "kernel_update_required",
+                "Update KPM integration in Settings and reboot to enable unloading"
+            )
+        );
         let modules = self.engine.modules()?;
         self.reconcile(&modules);
         let local_index = self.store.records.iter().position(|record| record.id == id);
@@ -552,16 +569,17 @@ impl<'a, E: Engine> Backend<'a, E> {
                 "KPM code is still resident; reboot is required"
             )
         );
-        self.info(id)
+        if local_index.is_some() {
+            self.info(id)
+        } else {
+            Ok(json!({ "id": id, "loaded": false, "pending_unload": false }))
+        }
     }
 
     fn remove(&mut self, id: &str) -> Result<Value> {
         if id.starts_with("runtime-") {
             self.unload(id)?;
-            return Err(failure(
-                "not_registered",
-                "The external KPM has no MilkSU registry file to remove",
-            ));
+            return Ok(json!({ "id": id, "removed": true }));
         }
         let index = self.index(id)?;
         let modules = self.modules()?;
@@ -570,10 +588,6 @@ impl<'a, E: Engine> Backend<'a, E> {
             .any(|module| module.name == self.store.records[index].metadata.name)
         {
             self.unload(id)?;
-            return Err(failure(
-                "reboot_required",
-                "Reboot before removing this resident KPM",
-            ));
         }
         let path = self.store.path(id)?;
         self.store.records.remove(index);
@@ -659,8 +673,8 @@ impl<'a, E: Engine> Backend<'a, E> {
 }
 
 fn execute(command: KpmCommand) -> Result<Value> {
-    if matches!(command, KpmCommand::Status) {
-        return status();
+    if let KpmCommand::Status { runtime_only } = command {
+        return status(runtime_only);
     }
     require_root()?;
     #[cfg(target_os = "android")]
@@ -687,7 +701,7 @@ fn execute(command: KpmCommand) -> Result<Value> {
         KpmCommand::Unload { id } => backend.unload(&id),
         KpmCommand::Remove { id } => backend.remove(&id),
         KpmCommand::Autoload { id, action } => backend.autoload(&id, action.enabled()),
-        KpmCommand::Status | KpmCommand::Integration { .. } => unreachable!(),
+        KpmCommand::Status { .. } | KpmCommand::Integration { .. } => unreachable!(),
     }
 }
 

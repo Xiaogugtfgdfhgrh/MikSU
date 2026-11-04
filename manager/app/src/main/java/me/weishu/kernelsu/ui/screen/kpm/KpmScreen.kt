@@ -106,16 +106,23 @@ fun KpmPager(bottomInnerPadding: Dp, isCurrentPage: Boolean) {
     val vm = systemViewModel()
     val state by vm.uiState.collectAsStateWithLifecycle()
     val mainPagerState = LocalMainPagerState.current
+    var pickingDocument by rememberSaveable { mutableStateOf(false) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        pickingDocument = false
         val kpmPage = mainPagerState.tabs.indexOf(MainTab.KPM)
         if (kpmPage >= 0) mainPagerState.animateToPage(kpmPage)
         uri?.let { vm.importDocument(it) }
     }
-    RefreshOnResume(isCurrentPage) { vm.refresh() }
+    RefreshOnResume(isCurrentPage) {
+        if (!pickingDocument && !state.busy && state.pendingImport == null) vm.refresh()
+    }
     KpmContent(
         state, bottomInnerPadding,
         onRefresh = { vm.refresh() },
-        onImport = { picker.launch(arrayOf("*/*")) },
+        onImport = {
+            pickingDocument = true
+            picker.launch(arrayOf("*/*"))
+        },
         onLoad = vm::selectModuleForLoad,
         onAction = vm::moduleAction,
         dialogs = {
@@ -299,7 +306,7 @@ fun KpmContent(
                                     FilledTonalIconButton(
                                         modifier = Modifier.width(64.dp),
                                         onClick = { removeId = module.id },
-                                        enabled = if (module.loaded) state.canUnload(module) else state.canRemove(module),
+                                        enabled = state.canRemove(module),
                                     ) {
                                         Icon(Icons.Filled.Delete, stringResource(
                                             if (module.loaded) R.string.kpm_unload else R.string.kpm_remove,
@@ -326,7 +333,7 @@ fun KpmContent(
                 confirmButton = {
                     TextButton(onClick = {
                         removeId = null
-                        onAction(module.id, if (module.loaded) "unload" else "remove", "")
+                        onAction(module.id, "remove", "")
                     }, enabled = !state.busy) {
                         Text(stringResource(if (module.loaded) R.string.kpm_unload else R.string.kpm_remove))
                     }
@@ -350,7 +357,8 @@ private fun KpmLoadDialog(
     var temporary by rememberSaveable(module.id) { mutableStateOf(false) }
     val canConfirm = !state.busy && state.unavailable == null && !state.safeMode &&
         state.status?.let {
-            it.supported && it.active && it.configuredEnabled && !it.rebootRequired && !it.transitionFailed
+            it.stateKnown && it.supported && it.active && it.configuredEnabled &&
+                !it.rebootRequired && !it.transitionFailed
         } == true && !module.pendingUnload
     AlertDialog(
         onDismissRequest = { if (!state.busy) onCancel() },

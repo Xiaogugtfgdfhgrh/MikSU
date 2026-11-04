@@ -154,8 +154,9 @@ private val PendingManagerUpdateSaver = listSaver<LatestVersionInfo?, Any>(
 
 @Composable
 internal fun SusfsHomeInfo.summary(): String {
-    val unavailable = stringResource(R.string.kpm_unavailable)
-    if (!supported) return unavailable
-    val status = stringResource(R.string.home_susfs_supported)
-    return "$status | ${version ?: unavailable} (${variant ?: unavailable})"
+    return summary(
+        supportedLabel = stringResource(R.string.home_susfs_supported),
+        unavailableLabel = stringResource(R.string.kpm_unavailable),
+        unknownLabel = stringResource(R.string.selinux_status_unknown),
+    )
 }
