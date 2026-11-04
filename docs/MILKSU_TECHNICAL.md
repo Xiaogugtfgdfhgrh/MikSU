@@ -96,7 +96,6 @@ python3 tools/audit-public-source.py
 The final APK verifier checks package identity, version, signing
 certificate, installation attributes, embedded daemon and native asset
 hashes. Host checks do not establish compatibility with every vendor kernel.
-See the [support matrix](../README.md#支持范围) for device validation coverage.
 
 ## Runtime Interfaces
 
