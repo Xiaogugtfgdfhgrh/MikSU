@@ -1,5 +1,6 @@
 package me.weishu.kernelsu.ui.viewmodel
 
+import android.widget.Toast
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -12,6 +13,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import me.weishu.kernelsu.R
+import me.weishu.kernelsu.ksuApp
 import me.weishu.kernelsu.data.repository.SettingsRepository
 import me.weishu.kernelsu.data.repository.SettingsRepositoryImpl
 import me.weishu.kernelsu.ui.util.SulogEntry
@@ -76,11 +80,7 @@ class SulogViewModel(
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
             runCatching {
                 val sulogStatus = repo.getSulogStatus()
-                val isSulogEnabled = if (sulogStatus == "forced") {
-                    repo.getSulogValue() == 1L
-                } else {
-                    repo.getSulogPersistValue() == 1L
-                }
+                val isSulogEnabled = repo.getSulogValue()?.let { it == 1L } ?: _uiState.value.isSulogEnabled
                 val files = listSulogFiles()
                 currentCoroutineContext().ensureActive()
                 val selectedFile = when {
@@ -128,8 +128,12 @@ class SulogViewModel(
         val preferredFilePath = _uiState.value.selectedFilePath
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            if (repo.setSulogEnabled(true)) {
-                repo.execKsudFeatureSave()
+            val saved = repo.setSulogEnabled(true) && repo.getSulogValue() == 1L &&
+                repo.execKsudFeatureSave("sulog")
+            if (!saved) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(ksuApp, R.string.settings_feature_save_failed, Toast.LENGTH_LONG).show()
+                }
             }
             refresh(preferredFilePath)
         }

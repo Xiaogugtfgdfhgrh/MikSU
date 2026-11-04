@@ -125,14 +125,12 @@ int ksu_handle_umount(uid_t old_uid, uid_t new_uid)
     return 0;
 }
 
-void __init ksu_kernel_umount_init(void)
+int __init ksu_kernel_umount_init(void)
 {
-    if (ksu_register_feature_handler(&kernel_umount_handler)) {
-        pr_err("Failed to register kernel_umount feature handler\n");
-    }
+    return ksu_register_feature_handler(&kernel_umount_handler);
 }
 
-void __exit ksu_kernel_umount_exit(void)
+void ksu_kernel_umount_exit(void)
 {
     ksu_unregister_feature_handler(KSU_FEATURE_KERNEL_UMOUNT);
 }

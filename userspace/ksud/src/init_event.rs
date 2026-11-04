@@ -34,6 +34,16 @@ pub fn on_post_fs_data() -> Result<()> {
     let safe_mode = crate::utils::is_safe_mode();
     let wait = ScriptWait::Until(Instant::now() + defs::BOOT_STAGE_TIMEOUT);
 
+    assets::ensure_binaries(true).with_context(|| "Failed to extract bin assets")?;
+    if !safe_mode {
+        if let Err(error) = crate::susfsd::load_if_autoload_enabled() {
+            warn!("SUSFS auto-load failed; root remains available: {error:#}");
+        }
+        if let Err(error) = crate::kpm::load_autoload() {
+            warn!("KPM auto-load failed; registrations retained: {error:#}");
+        }
+    }
+
     if safe_mode {
         // we should still ensure module directory exists in safe mode
         // because we may need to operate the module dir in safe mode
@@ -46,8 +56,6 @@ pub fn on_post_fs_data() -> Result<()> {
     }
 
     let module_dir = defs::MODULE_DIR;
-
-    assets::ensure_binaries(true).with_context(|| "Failed to extract bin assets")?;
 
     crate::hot_install::clean_trash();
 

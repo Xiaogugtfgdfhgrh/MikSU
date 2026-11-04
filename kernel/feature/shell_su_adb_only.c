@@ -75,14 +75,12 @@ static const struct ksu_feature_handler shell_su_adb_only_handler = {
     .set_handler = shell_su_adb_only_feature_set,
 };
 
-void __init ksu_shell_su_adb_only_init(void)
+int __init ksu_shell_su_adb_only_init(void)
 {
-    if (ksu_register_feature_handler(&shell_su_adb_only_handler)) {
-        pr_err("Failed to register shell_su_adb_only feature handler\n");
-    }
+    return ksu_register_feature_handler(&shell_su_adb_only_handler);
 }
 
-void __exit ksu_shell_su_adb_only_exit(void)
+void ksu_shell_su_adb_only_exit(void)
 {
     ksu_unregister_feature_handler(KSU_FEATURE_SHELL_SU_ADB_ONLY);
 }

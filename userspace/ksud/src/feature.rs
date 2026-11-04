@@ -2,8 +2,10 @@ use crate::sulog;
 use anyhow::{Context, Result, bail};
 use const_format::concatcp;
 use std::collections::HashMap;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 use crate::defs;
@@ -95,7 +97,9 @@ pub fn save_binary_config(features: &HashMap<u32, u64>) -> Result<()> {
     crate::utils::ensure_dir_exists(Path::new(defs::WORKING_DIR))?;
 
     let path = Path::new(FEATURE_CONFIG_PATH);
-    let mut file = File::create(path).with_context(|| "Failed to create feature config")?;
+    let directory = Path::new(defs::WORKING_DIR);
+    let mut file = tempfile::NamedTempFile::new_in(directory)
+        .with_context(|| "Failed to stage feature config")?;
 
     file.write_all(&FEATURE_MAGIC.to_le_bytes())
         .with_context(|| "Failed to write magic")?;
@@ -114,8 +118,12 @@ pub fn save_binary_config(features: &HashMap<u32, u64>) -> Result<()> {
             .with_context(|| format!("Failed to write feature value for id {id}"))?;
     }
 
-    file.sync_all()
+    file.as_file()
+        .sync_all()
         .with_context(|| "Failed to sync feature config")?;
+    file.persist(path)
+        .with_context(|| "Failed to publish feature config")?;
+    File::open(directory)?.sync_all()?;
 
     log::info!("Saved {} features to config", features.len());
     Ok(())
@@ -333,14 +341,42 @@ pub fn load_config_and_apply() -> Result<()> {
     Ok(())
 }
 
-pub fn save_config() -> Result<()> {
+pub fn save_config(selected: Option<&str>) -> Result<()> {
+    crate::utils::ensure_dir_exists(Path::new(defs::WORKING_DIR))?;
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(concatcp!(defs::WORKING_DIR, ".feature_config.lock"))?;
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        bail!(
+            "Cannot lock feature configuration: {}",
+            std::io::Error::last_os_error()
+        );
+    }
     // Keep persisted values of forced features, they are in effect again once
     // the boot config no longer forces them.
-    let mut features = load_binary_config().unwrap_or_default();
+    let mut features = load_binary_config()?;
+    let selected = selected.map(parse_feature_id).transpose()?;
 
     for feature_id in &FeatureId::ALL {
+        if selected.is_some_and(|selected| selected != *feature_id) {
+            continue;
+        }
         let id = *feature_id as u32;
-        if let Ok(state) = crate::ksucalls::get_feature(id)
+        let state = crate::ksucalls::get_feature(id);
+        if selected.is_some() {
+            let state = state
+                .as_ref()
+                .map_err(|error| anyhow::anyhow!("{error:#}"))?;
+            if !state.supported || state.forced {
+                bail!("Feature {} cannot be persisted", feature_id.name());
+            }
+        }
+        if let Ok(state) = state
             && state.supported
             && !state.forced
         {

@@ -28,6 +28,8 @@
 
 unsigned long phys_from_virt(unsigned long addr, int *err);
 int ksu_patch_text(void *dst, void *src, size_t len, int flags);
+/* Compare and replace in the same stop_machine critical section. */
+int ksu_patch_text_checked(void *dst, const void *expected, void *src, size_t len, int flags);
 void *scan_call_to(void *start, size_t size, void *target);
 
 #endif

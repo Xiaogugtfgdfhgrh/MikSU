@@ -9,28 +9,53 @@ const BOOTSTRAP_SOURCE: &str = "src/lkm_image_bootstrap.S";
 const BOOTSTRAP_OBJECT: &str = "lkm_image_bootstrap.o";
 const PREPARED_BOOTSTRAP_OBJECT: &str = ".lkm_image_bootstrap.o";
 
-fn get_git_version() -> Result<(u32, String), std::io::Error> {
-    let output = Command::new("git")
-        .args(["rev-list", "--count", "HEAD"])
-        .output()?;
-
-    let output = output.stdout;
-    let version_code = String::from_utf8(output).expect("Failed to read git count stdout");
-    let version_code: u32 = version_code
-        .trim()
-        .parse()
-        .map_err(|_| std::io::Error::other("Failed to parse git count"))?;
-    let version_code = 30000 + version_code;
-
-    let version_name = String::from_utf8(
-        Command::new("git")
-            .args(["describe", "--tags", "--always"])
-            .output()?
-            .stdout,
-    )
-    .map_err(|_| std::io::Error::other("Failed to read git describe stdout"))?;
-    let version_name = version_name.trim_start_matches('v').to_string();
-    Ok((version_code, version_name))
+fn get_release_version() -> io::Result<(u32, String)> {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../version.properties");
+    println!("cargo:rerun-if-changed={}", manifest.display());
+    let properties = fs::read_to_string(manifest)?;
+    let property = |key: &str| -> io::Result<String> {
+        properties
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .find(|(name, _)| name.trim() == key)
+            .map(|(_, value)| value.trim().to_owned())
+            .ok_or_else(|| io::Error::other(format!("Missing {key} in version.properties")))
+    };
+    let code = property("MILKSU_VERSION_CODE")?;
+    let name = property("MILKSU_VERSION_NAME")?;
+    let version_code = code
+        .parse::<u32>()
+        .map_err(|_| io::Error::other("Invalid release version code"))?;
+    if !(32800..=2_100_000_000).contains(&version_code) {
+        return Err(io::Error::other(
+            "Release version code must be at least 32800",
+        ));
+    }
+    let components = name.split('.').collect::<Vec<_>>();
+    if components.len() != 3
+        || components.iter().any(|part| {
+            !part
+                .parse::<u32>()
+                .is_ok_and(|value| value.to_string() == *part)
+        })
+    {
+        return Err(io::Error::other(
+            "Release name must be stable major.minor.patch",
+        ));
+    }
+    for (key, expected) in [
+        ("MILKSU_VERSION_CODE", &code),
+        ("MILKSU_VERSION_NAME", &name),
+    ] {
+        if let Ok(configured) = env::var(key)
+            && configured.trim() != expected
+        {
+            return Err(io::Error::other(format!(
+                "{key} must match version.properties for all components"
+            )));
+        }
+    }
+    Ok((version_code, name))
 }
 
 fn configure_bindgen() {
@@ -224,17 +249,13 @@ fn assemble_bootstrap() {
 
 fn main() {
     assemble_bootstrap();
+    println!("cargo:rerun-if-env-changed=MILKSU_VERSION_NAME");
+    println!("cargo:rerun-if-env-changed=MILKSU_VERSION_CODE");
+    println!("cargo:rerun-if-env-changed=KSU_PACKAGE_NAME");
 
-    let (code, name) = match get_git_version() {
-        Ok((code, name)) => (code, name),
-        Err(_) => {
-            // show warning if git is not installed
-            println!("cargo:warning=Failed to get git version, using 0.0.0");
-            (0, "0.0.0".to_string())
-        }
-    };
+    let (code, name) = get_release_version().expect("Read shared MilkSU release version");
     if env::var("KSU_PACKAGE_NAME").is_err() {
-        println!("cargo:rustc-env=KSU_PACKAGE_NAME=me.weishu.kernelsu");
+        println!("cargo:rustc-env=KSU_PACKAGE_NAME=io.milksu.manager");
     }
     println!("cargo:rustc-env=VERSION_CODE={code}");
     println!("cargo:rustc-env=VERSION_NAME={name}");

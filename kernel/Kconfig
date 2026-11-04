@@ -1,8 +1,8 @@
-menu "KernelSU"
+menu "MilkSU"
 
 config KSU
-	tristate "KernelSU function support"
-	depends on KPROBES && EXT4_FS
+	tristate "MilkSU ARM64 GKI root support"
+	depends on ARM64 && KPROBES && EXT4_FS && HAVE_SYSCALL_TRACEPOINTS
 	default y
 	help
 	  Enable kernel-level root privileges on Android System.
@@ -10,6 +10,9 @@ config KSU
 	  Requires CONFIG_EXT4_FS for `ext4_unregister_sysfs`.
 	  To compile as a module, choose M here: the
 	  module will be called kernelsu.
+	  Uses only the KernelSU-Next ARM64 dispatcher backend. An active LKM
+	  remains pinned until reboot because raw hook callbacks cannot safely
+	  veto module removal after module_exit starts.
 
 config KSU_DEBUG
 	bool "KernelSU debug mode"

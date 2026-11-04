@@ -4,12 +4,15 @@ import android.system.OsConstants
 import android.widget.Toast
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import me.weishu.kernelsu.Natives
 import me.weishu.kernelsu.R
@@ -25,6 +28,7 @@ class SettingsViewModel(
 
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
+    private val featureMutation = Mutex()
 
     init {
         refresh()
@@ -32,6 +36,7 @@ class SettingsViewModel(
 
     fun refresh() {
         viewModelScope.launch {
+            featureMutation.withLock {
             val checkUpdate = repo.checkUpdate
             val checkModuleUpdate = repo.checkModuleUpdate
             val themeMode = repo.themeMode
@@ -68,24 +73,14 @@ class SettingsViewModel(
             val isKernelUmountEnabled = repo.isKernelUmountEnabled()
             val selinuxHideStatus = repo.getSelinuxHideStatus()
             val isSelinuxHideEnabled = repo.isSelinuxHideEnabled()
+            val avcSpoofStatus = repo.getAvcSpoofStatus()
+            val avcSpoofValue = repo.getAvcSpoofValue()
             val sulogStatus = repo.getSulogStatus()
-            val isSulogEnabled = if (sulogStatus == "forced") {
-                repo.getSulogValue() == 1L
-            } else {
-                repo.getSulogPersistValue() == 1L
-            }
+            val isSulogEnabled = repo.getSulogValue()?.let { it == 1L } ?: _uiState.value.isSulogEnabled
             val adbRootStatus = repo.getAdbRootStatus()
-            val isAdbRootEnabled = if (adbRootStatus == "forced") {
-                repo.getAdbRootValue() == 1L
-            } else {
-                repo.getAdbRootPersistValue() == 1L
-            }
+            val isAdbRootEnabled = repo.getAdbRootValue()?.let { it == 1L } ?: _uiState.value.isAdbRootEnabled
             val shellSuAdbOnlyStatus = repo.getShellSuAdbOnlyStatus()
-            val isShellSuAdbOnlyEnabled = if (shellSuAdbOnlyStatus == "forced") {
-                repo.getShellSuAdbOnlyValue() == 1L
-            } else {
-                repo.getShellSuAdbOnlyPersistValue() == 1L
-            }
+            val isShellSuAdbOnlyEnabled = repo.getShellSuAdbOnlyValue()?.let { it == 1L } ?: _uiState.value.isShellSuAdbOnlyEnabled
             val isDefaultUmountModules = repo.isDefaultUmountModules()
             val uiMode = repo.uiMode
             val autoJailbreak = repo.autoJailbreak
@@ -123,6 +118,12 @@ class SettingsViewModel(
                     isKernelUmountEnabled = isKernelUmountEnabled,
                     selinuxHideStatus = selinuxHideStatus,
                     isSelinuxHideEnabled = isSelinuxHideEnabled,
+                    avcSpoofStatus = avcSpoofStatus,
+                    isAvcSpoofEnabled = if (it.avcSpoofBusy || avcSpoofValue == null) {
+                        it.isAvcSpoofEnabled
+                    } else {
+                        avcSpoofValue == 1L
+                    },
                     sulogStatus = sulogStatus,
                     isSulogEnabled = isSulogEnabled,
                     isDefaultUmountModules = isDefaultUmountModules,
@@ -131,6 +132,7 @@ class SettingsViewModel(
                     useSoftReboot = useSoftReboot,
                     isLateLoadMode = isLateLoadMode,
                 )
+            }
             }
         }
     }
@@ -271,58 +273,101 @@ class SettingsViewModel(
 
     fun setSuCompatMode(mode: Int) {
         viewModelScope.launch(Dispatchers.IO) {
-            when (mode) {
-                0 -> if (repo.setSuEnabled(true)) {
-                    repo.execKsudFeatureSave()
-                    repo.setSuCompatModePref(0)
-                    _uiState.update { it.copy(suCompatMode = 0, isSuEnabled = true) }
+            featureMutation.withLock {
+                if (mode !in 0..2) return@withLock
+                val persistentEnabled = mode != 2
+                val changed = repo.setSuEnabled(persistentEnabled)
+                val saved = changed && repo.execKsudFeatureSave("su_compat")
+                if (saved) {
+                    repo.setSuCompatModePref(if (persistentEnabled) 0 else 2)
                 }
+                val runtimeChanged = if (mode == 1 && saved) repo.setSuEnabled(false) else changed
+                val actual = repo.isSuEnabled()
+                val persisted = repo.getSuCompatPersistValue()
+                _uiState.update {
+                    it.copy(
+                        isSuEnabled = actual,
+                        suCompatMode = if (actual) 0 else if (persisted == 0L) 2 else 1,
+                    )
+                }
+                if (!saved || !runtimeChanged) featureSaveFailed()
+            }
+        }
+    }
 
-                1 -> if (repo.setSuEnabled(true)) {
-                    repo.execKsudFeatureSave()
-                    if (repo.setSuEnabled(false)) {
-                        // "Disable until reboot" implies it should be enabled on next boot.
-                        // We set the preference to 0 (Enabled) to match the persistent state.
-                        repo.setSuCompatModePref(0)
-                        _uiState.update { it.copy(suCompatMode = 1, isSuEnabled = false) }
-                    }
-                }
+    private suspend fun featureSaveFailed() {
+        withContext(Dispatchers.Main) {
+            Toast.makeText(ksuApp, R.string.settings_feature_save_failed, Toast.LENGTH_LONG).show()
+        }
+    }
 
-                2 -> if (repo.setSuEnabled(false)) {
-                    repo.execKsudFeatureSave()
-                    repo.setSuCompatModePref(2)
-                    _uiState.update { it.copy(suCompatMode = 2, isSuEnabled = false) }
-                }
+    private fun setPersistentFeature(
+        feature: String,
+        enabled: Boolean,
+        setter: (Boolean) -> Boolean,
+        read: suspend () -> Boolean?,
+        update: (SettingsUiState, Boolean) -> SettingsUiState,
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            featureMutation.withLock {
+                val changed = setter(enabled)
+                val actual = read()
+                val saved = changed && actual == enabled && repo.execKsudFeatureSave(feature)
+                if (actual != null) _uiState.update { update(it, actual) }
+                if (!saved) featureSaveFailed()
             }
         }
     }
 
     fun setKernelUmountEnabled(enabled: Boolean) {
-        viewModelScope.launch(Dispatchers.IO) {
-            if (repo.setKernelUmountEnabled(enabled)) {
-                repo.execKsudFeatureSave()
-                _uiState.update { it.copy(isKernelUmountEnabled = enabled) }
-            }
+        setPersistentFeature("kernel_umount", enabled, repo::setKernelUmountEnabled,
+            { repo.isKernelUmountEnabled() }) { state, actual ->
+            state.copy(isKernelUmountEnabled = actual)
         }
     }
 
     fun setSelinuxHideEnabled(enabled: Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
-            val status = repo.setSelinuxHideEnabled(enabled)
-            repo.execKsudFeatureSave()
-            _uiState.update { it.copy(isSelinuxHideEnabled = enabled) }
-            when (status) {
-                0 -> {}
-                -OsConstants.EAGAIN -> {
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(ksuApp, R.string.settings_selinux_hide_reboot_required,
-                            Toast.LENGTH_LONG).show()
+            featureMutation.withLock {
+                val status = repo.setSelinuxHideEnabled(enabled)
+                val saved = (status == 0 || status == -OsConstants.EAGAIN) &&
+                    repo.execKsudFeatureSave("selinux_hide")
+                _uiState.update { it.copy(isSelinuxHideEnabled = repo.isSelinuxHideEnabled()) }
+                if (!saved && (status == 0 || status == -OsConstants.EAGAIN)) featureSaveFailed()
+                when (status) {
+                    0 -> {}
+                    -OsConstants.EAGAIN -> withContext(Dispatchers.Main) {
+                        Toast.makeText(ksuApp, R.string.settings_selinux_hide_reboot_required, Toast.LENGTH_LONG).show()
+                    }
+                    else -> withContext(Dispatchers.Main) {
+                        Toast.makeText(ksuApp, ksuApp.getString(R.string.settings_selinux_hide_failed, status), Toast.LENGTH_LONG).show()
                     }
                 }
-                else -> {
+            }
+        }
+    }
+
+    fun setAvcSpoofEnabled(enabled: Boolean) {
+        if (_uiState.value.avcSpoofBusy || _uiState.value.avcSpoofStatus != "supported") return
+        _uiState.update { it.copy(avcSpoofBusy = true) }
+        viewModelScope.launch(Dispatchers.IO) {
+            featureMutation.withLock {
+                var saved = false
+                try {
+                    val changed = repo.setAvcSpoofEnabled(enabled)
+                    val actual = repo.getAvcSpoofValue()
+                    saved = changed && actual == (if (enabled) 1L else 0L) && repo.execKsudFeatureSave("avc_spoof")
+                    if (actual != null) _uiState.update { it.copy(isAvcSpoofEnabled = actual == 1L) }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    saved = false
+                } finally {
+                    _uiState.update { it.copy(avcSpoofBusy = false) }
+                }
+                if (!saved) {
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(ksuApp, ksuApp.getString(R.string.settings_selinux_hide_failed, status),
-                            Toast.LENGTH_LONG).show()
+                        Toast.makeText(ksuApp, R.string.settings_avc_spoof_failed, Toast.LENGTH_LONG).show()
                     }
                 }
             }
@@ -340,29 +385,23 @@ class SettingsViewModel(
     }
 
     fun setSulogEnabled(enabled: Boolean) {
-        viewModelScope.launch(Dispatchers.IO) {
-            if (repo.setSulogEnabled(enabled)) {
-                repo.execKsudFeatureSave()
-                _uiState.update { it.copy(isSulogEnabled = enabled) }
-            }
+        setPersistentFeature("sulog", enabled, repo::setSulogEnabled,
+            { repo.getSulogValue()?.let { it == 1L } }) { state, actual ->
+            state.copy(isSulogEnabled = actual)
         }
     }
 
     fun setShellSuAdbOnlyEnabled(enabled: Boolean) {
-        viewModelScope.launch(Dispatchers.IO) {
-            if (repo.setShellSuAdbOnlyEnabled(enabled)) {
-                repo.execKsudFeatureSave()
-                _uiState.update { it.copy(isShellSuAdbOnlyEnabled = enabled) }
-            }
+        setPersistentFeature("shell_su_adb_only", enabled, repo::setShellSuAdbOnlyEnabled,
+            { repo.getShellSuAdbOnlyValue()?.let { it == 1L } }) { state, actual ->
+            state.copy(isShellSuAdbOnlyEnabled = actual)
         }
     }
 
     fun setAdbRootEnabled(enabled: Boolean) {
-        viewModelScope.launch(Dispatchers.IO) {
-            if (repo.setAdbRootEnabled(enabled)) {
-                repo.execKsudFeatureSave()
-                _uiState.update { it.copy(isAdbRootEnabled = enabled) }
-            }
+        setPersistentFeature("adb_root", enabled, repo::setAdbRootEnabled,
+            { repo.getAdbRootValue()?.let { it == 1L } }) { state, actual ->
+            state.copy(isAdbRootEnabled = actual)
         }
     }
 

@@ -8,7 +8,7 @@ import me.weishu.kernelsu.ui.UiMode
 @Immutable
 data class SettingsUiState(
     val uiMode: String = UiMode.DEFAULT_VALUE,
-    val checkUpdate: Boolean = true,
+    val checkUpdate: Boolean = false,
     val checkModuleUpdate: Boolean = true,
     val themeMode: Int = 0,
     val miuixMonet: Boolean = false,
@@ -38,6 +38,9 @@ data class SettingsUiState(
     // SELinux Hide
     val selinuxHideStatus: String = "",
     val isSelinuxHideEnabled: Boolean = false,
+    val avcSpoofStatus: String = "",
+    val isAvcSpoofEnabled: Boolean = false,
+    val avcSpoofBusy: Boolean = false,
 
     // SU Log
     val sulogStatus: String = "",
@@ -74,6 +77,7 @@ data class SettingsScreenActions(
     val onSetSuCompatMode: (Int) -> Unit,
     val onSetKernelUmountEnabled: (Boolean) -> Unit,
     val onSetSelinuxHideEnabled: (Boolean) -> Unit,
+    val onSetAvcSpoofEnabled: (Boolean) -> Unit,
     val onSetSulogEnabled: (Boolean) -> Unit,
     val onSetAdbRootEnabled: (Boolean) -> Unit,
     val onSetShellSuAdbOnlyEnabled: (Boolean) -> Unit,
@@ -82,4 +86,6 @@ data class SettingsScreenActions(
     val onSetAutoJailbreak: (Boolean) -> Unit,
     val onSetUseSoftReboot: (Boolean) -> Unit,
     val onOpenAbout: () -> Unit,
+    val onSetKpmIntegration: (Boolean) -> Unit = {},
+    val onSetSusfsAutoload: (Boolean) -> Unit = {},
 )

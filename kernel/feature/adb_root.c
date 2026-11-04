@@ -220,14 +220,12 @@ static const struct ksu_feature_handler ksu_adb_root_handler = {
     .set_handler = kernel_adb_root_feature_set,
 };
 
-void __init ksu_adb_root_init(void)
+int __init ksu_adb_root_init(void)
 {
-    if (ksu_register_feature_handler(&ksu_adb_root_handler)) {
-        pr_err("Failed to register adb_root feature handler\n");
-    }
+    return ksu_register_feature_handler(&ksu_adb_root_handler);
 }
 
-void __exit ksu_adb_root_exit(void)
+void ksu_adb_root_exit(void)
 {
     ksu_unregister_feature_handler(KSU_FEATURE_ADB_ROOT);
 }

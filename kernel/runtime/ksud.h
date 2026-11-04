@@ -5,8 +5,8 @@
 
 #define KSUD_PATH "/data/adb/ksud"
 
-void ksu_ksud_init();
-void ksu_ksud_exit();
+int ksu_ksud_init(void);
+int ksu_ksud_exit(void);
 
 void ksu_execve_hook_ksud(const struct pt_regs *regs);
 void ksu_execveat_hook_ksud(const struct pt_regs *regs);

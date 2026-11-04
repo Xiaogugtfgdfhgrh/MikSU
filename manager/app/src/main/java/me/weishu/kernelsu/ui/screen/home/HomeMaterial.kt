@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.DeveloperBoard
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.VolunteerActivism
@@ -133,7 +134,7 @@ fun HomePagerMaterial(
                 state = state,
                 actions = actions,
             )
-            InfoCard(systemInfo = state.systemInfo)
+            InfoCard(systemInfo = state.systemInfo, susfsInfo = state.susfsInfo)
             SupportLinks(onOpenUrl = actions.onOpenUrl)
             Spacer(
                 Modifier.height(
@@ -159,13 +160,13 @@ private fun UpdateCard(
         enter = fadeIn() + expandVertically(),
         exit = shrinkVertically() + fadeOut()
     ) {
-        val updateDialog = rememberConfirmDialog(onConfirm = { actions.onOpenUrl(newVersion.downloadUrl) })
+        val updateDialog = rememberConfirmDialog(onConfirm = { actions.onUpdateClick(newVersion) })
         WarningCard(
             message = stringResource(id = R.string.new_version_available, newVersion.versionCode),
             level = WarningLevel.Notice
         ) {
             if (newVersion.changelog.isEmpty()) {
-                actions.onOpenUrl(newVersion.downloadUrl)
+                actions.onUpdateClick(newVersion)
             } else {
                 updateDialog.showConfirm(
                     title = title,
@@ -361,15 +362,16 @@ private fun SupportLinks(
     modifier: Modifier = Modifier,
 ) {
     val learnMoreUrl = stringResource(R.string.home_learn_kernelsu_url)
+    val supportUrl = stringResource(R.string.home_support_project_url)
 
     SegmentedColumn(modifier = modifier.fillMaxWidth()) {
         item {
             SegmentedListItem(
-                onClick = { onOpenUrl("https://patreon.com/weishu") },
-                headlineContent = { Text(stringResource(R.string.home_support_title)) },
-                supportingContent = { Text(stringResource(R.string.home_support_content)) },
+                onClick = { onOpenUrl(supportUrl) },
+                headlineContent = { Text(stringResource(R.string.home_support_development_title)) },
+                supportingContent = { Text(stringResource(R.string.home_support_development_summary)) },
                 leadingContent = {
-                    Icon(Icons.Filled.VolunteerActivism, stringResource(R.string.home_support_title))
+                    Icon(Icons.Filled.VolunteerActivism, stringResource(R.string.home_support_development_title))
                 },
                 trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
             )
@@ -392,6 +394,7 @@ private fun SupportLinks(
 private fun InfoCard(
     systemInfo: SystemInfo,
     modifier: Modifier = Modifier,
+    susfsInfo: SusfsHomeInfo = SusfsHomeInfo(),
 ) {
     @Composable
     fun InfoCardItem(
@@ -439,6 +442,15 @@ private fun InfoCard(
                     label = stringResource(R.string.home_manager_version),
                     content = systemInfo.managerVersion,
                 )
+            }
+            if (susfsInfo.integrationEnabled) {
+                item {
+                    InfoCardItem(
+                        icon = Icons.Filled.Shield,
+                        label = stringResource(R.string.home_susfs_version),
+                        content = susfsInfo.summary(),
+                    )
+                }
             }
             item {
                 InfoCardItem(

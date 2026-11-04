@@ -5,7 +5,7 @@
 #include <asm/ptrace.h>
 
 #ifndef KSU_NO_PREINIT
-void ksu_preinit_init(void);
+int ksu_preinit_init(void);
 void ksu_preinit_exit(void);
 
 // Swap the runner in for PID 1's "/system/bin/init selinux_setup" execve.
@@ -19,8 +19,9 @@ void ksu_preinit_release(void);
 // Whether the runner is built in and not disabled with preinit=0.
 bool ksu_preinit_enabled_param(void);
 #else
-static inline void ksu_preinit_init(void)
+static inline int ksu_preinit_init(void)
 {
+    return 0;
 }
 static inline void ksu_preinit_exit(void)
 {

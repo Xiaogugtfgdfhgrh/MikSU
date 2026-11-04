@@ -33,7 +33,9 @@ use crate::defs::{MODULE_DIR, MODULE_UPDATE_DIR, UPDATE_FILE_NAME};
 use crate::module::ModuleType::{Active, All};
 use std::os::unix::{prelude::PermissionsExt, process::CommandExt};
 
-const INSTALLER_CONTENT: &str = include_str!("./installer.sh");
+// Checkouts on Windows can contain CRLF even though Android's shell requires LF.
+const INSTALLER_CONTENT: &str =
+    const_format::str_replace!(include_str!("./installer.sh"), "\r\n", "\n");
 const INSTALL_MODULE_SCRIPT: &str = concatcp!(
     INSTALLER_CONTENT,
     "\n",

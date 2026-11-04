@@ -25,6 +25,7 @@
 #include "manager/manager_identity.h"
 #include "infra/su_mount_ns.h"
 #include "feature/shell_su_adb_only.h"
+#include "milksu_root.h"
 
 #define FILE_MAGIC 0x7f4b5355 // ' KSU', u32
 #define FILE_FORMAT_VERSION 4 // u32
@@ -33,6 +34,7 @@
 #define KSU_DEFAULT_SELINUX_DOMAIN "u:r:" KERNEL_SU_DOMAIN ":s0"
 
 static DEFINE_MUTEX(allowlist_mutex);
+static bool persistence_pending;
 
 // default profiles, these may be used frequently, so we cache it
 static struct root_profile default_root_profile;
@@ -447,6 +449,10 @@ void ksu_persistent_allow_list()
 {
     struct task_struct *tsk;
 
+    if (!milksu_root_is_ready()) {
+        WRITE_ONCE(persistence_pending, true);
+        return;
+    }
     rcu_read_lock();
     tsk = get_pid_task(find_vpid(1), PIDTYPE_PID);
     if (!tsk) {
@@ -469,6 +475,12 @@ void ksu_persistent_allow_list()
 
 put_task:
     put_task_struct(tsk);
+}
+
+void ksu_allowlist_ready(void)
+{
+    if (xchg(&persistence_pending, false))
+        ksu_persistent_allow_list();
 }
 
 static void migrate_profile(u32 version, struct app_profile *profile)
@@ -602,7 +614,7 @@ void __init ksu_allowlist_init(void)
     init_default_profiles();
 }
 
-void __exit ksu_allowlist_exit(void)
+void ksu_allowlist_exit(void)
 {
     struct perm_data *np = NULL;
     struct hlist_node *tmp;

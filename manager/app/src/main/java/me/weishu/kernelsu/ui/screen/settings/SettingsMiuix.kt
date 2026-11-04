@@ -42,7 +42,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import me.weishu.kernelsu.R
+import me.weishu.kernelsu.BuildConfig
 import me.weishu.kernelsu.ui.UiMode
+import me.weishu.kernelsu.ui.screen.kpm.KpmUiState
 import me.weishu.kernelsu.ui.component.KsuIsValid
 import me.weishu.kernelsu.ui.component.dialog.rememberLoadingDialog
 import me.weishu.kernelsu.ui.component.miuix.SendLogDialog
@@ -72,6 +74,7 @@ fun SettingPagerMiuix(
     uiState: SettingsUiState,
     actions: SettingsScreenActions,
     bottomInnerPadding: Dp,
+    systemState: KpmUiState = KpmUiState(),
 ) {
     val scrollBehavior = MiuixScrollBehavior()
     val enableBlur = LocalEnableBlur.current
@@ -124,6 +127,7 @@ fun SettingPagerMiuix(
                                 )
                             },
                             checked = uiState.checkUpdate,
+                            enabled = BuildConfig.CORE_UPDATE_ENABLED,
                             onCheckedChange = actions.onSetCheckUpdate
                         )
                         KsuIsValid {
@@ -259,6 +263,8 @@ fun SettingPagerMiuix(
                                 onCheckedChange = actions.onSetKernelUmountEnabled
                             )
 
+                            SystemIntegrationPreferencesMiuix(systemState, actions)
+
                             val selinuxHideSummary = when (uiState.selinuxHideStatus) {
                                 "unsupported" -> stringResource(id = R.string.feature_status_unsupported_summary)
                                 "managed" -> stringResource(id = R.string.feature_status_managed_summary)
@@ -279,6 +285,28 @@ fun SettingPagerMiuix(
                                 enabled = uiState.selinuxHideStatus == "supported",
                                 checked = uiState.isSelinuxHideEnabled,
                                 onCheckedChange = actions.onSetSelinuxHideEnabled
+                            )
+
+                            val avcSummary = when (uiState.avcSpoofStatus) {
+                                "unsupported" -> stringResource(R.string.feature_status_unsupported_summary)
+                                "managed" -> stringResource(R.string.feature_status_managed_summary)
+                                "forced" -> stringResource(R.string.feature_status_forced_summary)
+                                else -> stringResource(R.string.settings_enable_avc_spoof_summary)
+                            }
+                            SwitchPreference(
+                                title = stringResource(R.string.settings_enable_avc_spoof),
+                                summary = avcSummary,
+                                startAction = {
+                                    Icon(
+                                        Icons.Rounded.Security,
+                                        modifier = Modifier.padding(end = 6.dp),
+                                        contentDescription = stringResource(R.string.settings_enable_avc_spoof),
+                                        tint = colorScheme.onBackground
+                                    )
+                                },
+                                enabled = uiState.avcSpoofStatus == "supported" && !uiState.avcSpoofBusy,
+                                checked = uiState.isAvcSpoofEnabled,
+                                onCheckedChange = actions.onSetAvcSpoofEnabled
                             )
 
                             val sulogSummary = when (uiState.sulogStatus) {

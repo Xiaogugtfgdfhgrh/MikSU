@@ -26,8 +26,14 @@ mod feature;
 mod feature_id;
 #[cfg(target_os = "android")]
 mod hot_install;
+mod image_transaction;
 #[cfg(target_os = "android")]
 mod init_event;
+#[cfg(test)]
+mod installer_tests;
+#[cfg(target_os = "android")]
+mod kpm;
+mod kpm_image;
 #[cfg(target_os = "android")]
 mod ksucalls;
 #[cfg(target_os = "android")]
@@ -54,12 +60,18 @@ mod restorecon;
 mod sepolicy;
 #[cfg(target_os = "android")]
 mod soft_reboot;
+#[cfg(any(target_os = "android", test))]
+mod storage;
 #[cfg(target_os = "android")]
 mod su;
 #[cfg(target_os = "android")]
 mod sulog;
 #[cfg(target_os = "android")]
+mod susfsd;
+#[cfg(target_os = "android")]
 mod unload;
+#[cfg(any(target_os = "android", test))]
+mod unload_policy;
 #[cfg(target_os = "android")]
 mod utils;
 

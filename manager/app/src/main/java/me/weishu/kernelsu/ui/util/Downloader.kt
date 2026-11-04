@@ -5,7 +5,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.withContext
+import me.weishu.kernelsu.BuildConfig
 import me.weishu.kernelsu.data.registry.ExpectedFile
+import me.weishu.kernelsu.data.system.CoreUpdatePolicy
 import me.weishu.kernelsu.ksuApp
 import me.weishu.kernelsu.ui.util.module.LatestVersionInfo
 import okhttp3.Request
@@ -52,42 +54,39 @@ internal suspend fun isDownloadAvailable(uri: Uri): Boolean = withContext(Dispat
 }
 
 fun checkNewVersion(): LatestVersionInfo {
+    if (!BuildConfig.CORE_UPDATE_ENABLED || BuildConfig.IS_PR_BUILD) return LatestVersionInfo()
+    val url = CoreUpdatePolicy.url(BuildConfig.MILKSU_UPDATE_URL) ?: return LatestVersionInfo()
     if (!isNetworkAvailable(ksuApp)) return LatestVersionInfo()
-    val url = "https://api.github.com/repos/tiann/KernelSU/releases/latest"
-    // default null value if failed
-    val defaultValue = LatestVersionInfo()
-    runCatching {
-        ksuApp.okhttpClient.newCall(Request.Builder().url(url).build()).execute()
+    return runCatching {
+        val request = Request.Builder()
+            .url(url)
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .build()
+        ksuApp.okhttpClient.newCall(request).execute()
             .use { response ->
-                if (!response.isSuccessful) {
-                    return defaultValue
+                if (response.code != 200) {
+                    return@use LatestVersionInfo()
                 }
-                val body = response.body.string()
-                val json = org.json.JSONObject(body)
-                val changelog = json.optString("body")
-
-                val assets = json.getJSONArray("assets")
-                for (i in 0 until assets.length()) {
-                    val asset = assets.getJSONObject(i)
-                    val name = asset.getString("name")
-                    if (!name.endsWith(".apk")) {
-                        continue
+                val limit = 2L * 1024 * 1024
+                if (response.body.contentLength() > limit) return@use LatestVersionInfo()
+                val source = response.body.source()
+                val body = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(8192)
+                while (true) {
+                    val count = source.read(buffer)
+                    if (count == -1) break
+                    if (body.size().toLong() + count > limit) {
+                        return@use LatestVersionInfo()
                     }
-
-                    val regex = Regex("v(.+?)_(\\d+)-")
-                    val matchResult = regex.find(name) ?: continue
-                    matchResult.groupValues[1]
-                    val versionCode = matchResult.groupValues[2].toInt()
-                    val downloadUrl = asset.getString("browser_download_url")
-
-                    return LatestVersionInfo(
-                        versionCode,
-                        downloadUrl,
-                        changelog
-                    )
+                    body.write(buffer, 0, count)
                 }
-
+                CoreUpdatePolicy.release(
+                    statusCode = response.code,
+                    body = body.toString(Charsets.UTF_8.name()),
+                    currentVersionCode = BuildConfig.VERSION_CODE,
+                    endpoint = url,
+                )
             }
-    }
-    return defaultValue
+    }.getOrDefault(LatestVersionInfo())
 }

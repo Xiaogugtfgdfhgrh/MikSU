@@ -16,6 +16,7 @@
 #include "arch.h"
 #include "util.h"
 #include "klog.h" // IWYU pragma: keep
+#include "milksu_root.h"
 
 #define KSU_DRIVER_PERMISSION_SU_SESSION (1UL << 0)
 
@@ -111,6 +112,7 @@ static void ksu_install_fd_tw_func(struct callback_head *cb)
     }
 
     kfree(tw);
+    module_put(THIS_MODULE);
 }
 
 static int reboot_handler_pre(struct kprobe *p, struct pt_regs *regs)
@@ -119,19 +121,25 @@ static int reboot_handler_pre(struct kprobe *p, struct pt_regs *regs)
     int magic1 = (int)PT_REGS_SYSCALL_PARM1(real_regs);
     int magic2 = (int)PT_REGS_PARM2(real_regs);
 
-    if (magic1 == KSU_INSTALL_MAGIC1 && magic2 == KSU_INSTALL_MAGIC2) {
+    if (milksu_root_is_ready() &&
+        magic1 == KSU_INSTALL_MAGIC1 && magic2 == KSU_INSTALL_MAGIC2) {
         struct ksu_install_fd_tw *tw;
         unsigned long arg4 = (unsigned long)PT_REGS_SYSCALL_PARM4(real_regs);
 
-        tw = kzalloc(sizeof(*tw), GFP_ATOMIC);
-        if (!tw)
+        if (!try_module_get(THIS_MODULE))
             return 0;
+        tw = kzalloc(sizeof(*tw), GFP_ATOMIC);
+        if (!tw) {
+            module_put(THIS_MODULE);
+            return 0;
+        }
 
         tw->outp = (int __user *)arg4;
         tw->cb.func = ksu_install_fd_tw_func;
 
         if (task_work_add(current, &tw->cb, TWA_RESUME)) {
             kfree(tw);
+            module_put(THIS_MODULE);
             pr_warn("install fd add task_work failed\n");
         }
     }
@@ -144,7 +152,9 @@ static struct kprobe reboot_kp = {
     .pre_handler = reboot_handler_pre,
 };
 
-void __init ksu_supercalls_init(void)
+static bool reboot_registered;
+
+int __init ksu_supercalls_init(void)
 {
     int rc;
 
@@ -154,12 +164,17 @@ void __init ksu_supercalls_init(void)
     if (rc) {
         pr_err("reboot kprobe failed: %d\n", rc);
     } else {
+        reboot_registered = true;
         pr_info("reboot kprobe registered successfully\n");
     }
+    return rc;
 }
 
-void __exit ksu_supercalls_exit(void)
+void ksu_supercalls_exit(void)
 {
-    unregister_kprobe(&reboot_kp);
+    if (reboot_registered) {
+        unregister_kprobe(&reboot_kp);
+        reboot_registered = false;
+    }
     ksu_supercall_cleanup_state();
 }

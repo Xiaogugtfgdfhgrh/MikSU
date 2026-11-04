@@ -30,10 +30,15 @@
 #include "ksu.h"
 #include "policy/feature.h"
 #include "hook/lsm_hook.h"
+#include "milksu_root.h"
 
 static DEFINE_MUTEX(selinux_hide_mutex);
 static bool ksu_selinux_hide_enabled __read_mostly = false;
 static bool ksu_selinux_hide_running __read_mostly = false;
+static bool context_hooked, access_hooked, status_hooked;
+static bool hide_ever_enabled;
+static bool hide_registered;
+static bool status_ever_hooked;
 
 enum sel_inos {
     SEL_ROOT_INO = 2,
@@ -380,8 +385,8 @@ static int my_sel_open_handle_status(struct inode *inode, struct file *filp)
     return ret;
 }
 
-static void hook_selinux_status_open();
-static void ksu_selinux_hide_unhook();
+static int hook_selinux_status_open(void);
+static int ksu_selinux_hide_unhook(void);
 static int ksu_selinux_hide_enable()
 {
     int ret;
@@ -395,7 +400,9 @@ static int ksu_selinux_hide_enable()
         pr_err("selinux_hide: no write_op found!\n");
         return -ENOSYS;
     }
-    hook_selinux_status_open();
+    ret = hook_selinux_status_open();
+    if (ret)
+        return ret;
 
     security_dump_masked_av_fn = find_kernel_symbol_exact("security_dump_masked_av");
     if (!security_dump_masked_av_fn) {
@@ -410,21 +417,36 @@ static int ksu_selinux_hide_enable()
     pr_info("selinux_hide: context_write: 0x%lx [%pSb]\n", (unsigned long)*context_write, *context_write);
     write_op_fn my = my_write_context;
     orig_context_write = *context_write;
-    ret = ksu_patch_text(context_write, &my, sizeof(my), KSU_PATCH_TEXT_FLUSH_DCACHE);
+    ret = ksu_patch_text_checked(context_write, &orig_context_write, &my,
+                                sizeof(my), KSU_PATCH_TEXT_FLUSH_DCACHE);
     if (ret) {
+        if (ret == -EUCLEAN) {
+            context_hooked = true;
+            hide_ever_enabled = true;
+            milksu_root_pin_callbacks();
+        }
         pr_err("selinux_hide: init: patch_text context_write err: %d\n", ret);
         goto unhook;
     }
+    context_hooked = true;
+    hide_ever_enabled = true;
+    milksu_root_pin_callbacks();
 
     access_write = &selinux_write_op[SEL_ACCESS];
     pr_info("selinux_hide: access_write: 0x%lx [%pSb]\n", (unsigned long)*access_write, *access_write);
     my = my_write_access;
     orig_access_write = *access_write;
-    ret = ksu_patch_text(access_write, &my, sizeof(my), KSU_PATCH_TEXT_FLUSH_DCACHE);
+    ret = ksu_patch_text_checked(access_write, &orig_access_write, &my,
+                                sizeof(my), KSU_PATCH_TEXT_FLUSH_DCACHE);
     if (ret) {
+        if (ret == -EUCLEAN) {
+            access_hooked = true;
+            milksu_root_pin_callbacks();
+        }
         pr_err("selinux_hide: init: patch_text access_write err: %d\n", ret);
         goto unhook;
     }
+    access_hooked = true;
 
     ret = ksu_lsm_hook(&selinux_setprocattr_hook);
     if (ret) {
@@ -435,43 +457,52 @@ static int ksu_selinux_hide_enable()
     return 0;
 
 unhook:
-    ksu_selinux_hide_unhook();
-    return -ENOSYS;
+    if (ksu_selinux_hide_unhook())
+        pr_err("selinux_hide: partial hooks retained; provider stays resident\n");
+    return ret;
 }
 
-static void ksu_selinux_hide_unhook()
+static int ksu_selinux_hide_unhook(void)
 {
     int ret;
-    if (orig_context_write) {
-        ret =
-            ksu_patch_text(context_write, &orig_context_write, sizeof(orig_context_write), KSU_PATCH_TEXT_FLUSH_DCACHE);
-        orig_context_write = NULL;
-        if (ret) {
-            pr_err("selinux_hide: exit: patch_text context_write err: %d\n", ret);
-        }
+    write_op_fn replacement;
+
+    ret = ksu_lsm_unhook(&selinux_setprocattr_hook);
+    if (ret)
+        return ret;
+    if (access_hooked) {
+        replacement = my_write_access;
+        ret = ksu_patch_text_checked(access_write, &replacement, &orig_access_write,
+                                    sizeof(replacement), KSU_PATCH_TEXT_FLUSH_DCACHE);
+        if (ret)
+            return ret;
+        access_hooked = false;
     }
-    if (orig_access_write) {
-        ret = ksu_patch_text(access_write, &orig_access_write, sizeof(orig_access_write), KSU_PATCH_TEXT_FLUSH_DCACHE);
-        orig_access_write = NULL;
-        if (ret) {
-            pr_err("selinux_hide: exit: patch_text access_write err: %d\n", ret);
-        }
+    if (context_hooked) {
+        replacement = my_write_context;
+        ret = ksu_patch_text_checked(context_write, &replacement, &orig_context_write,
+                                    sizeof(replacement), KSU_PATCH_TEXT_FLUSH_DCACHE);
+        if (ret)
+            return ret;
+        context_hooked = false;
     }
-    if (sel_open_handle_status_slot && orig_sel_open_handle_status) {
-        ret = ksu_patch_text(sel_open_handle_status_slot, &orig_sel_open_handle_status,
-                             sizeof(orig_sel_open_handle_status), KSU_PATCH_TEXT_FLUSH_DCACHE);
-        orig_sel_open_handle_status = NULL;
-        if (ret) {
-            pr_err("selinux_hide: exit: patch_text sel_open_handle_status err: %d\n", ret);
-        }
+    if (status_hooked) {
+        sel_open_handle_status_fn replacement_open = my_sel_open_handle_status;
+        ret = ksu_patch_text_checked(sel_open_handle_status_slot, &replacement_open,
+                                    &orig_sel_open_handle_status, sizeof(replacement_open),
+                                    KSU_PATCH_TEXT_FLUSH_DCACHE);
+        if (ret)
+            return ret;
+        status_hooked = false;
     }
-    ksu_lsm_unhook(&selinux_setprocattr_hook);
+    /* Old callers can still use predecessor pointers after the slots change. */
+    return 0;
 }
 
-static void ksu_selinux_hide_disable()
+static int ksu_selinux_hide_disable(void)
 {
     pr_info("selinux_hide: exit selinux hide\n");
-    ksu_selinux_hide_unhook();
+    return ksu_selinux_hide_unhook();
 }
 
 static int selinux_hide_feature_get(u64 *value)
@@ -486,7 +517,6 @@ static int selinux_hide_feature_set(u64 value)
     int ret = 0;
     pr_info("selinux_hide: set to %d\n", enable);
     mutex_lock(&selinux_hide_mutex);
-    ksu_selinux_hide_enabled = enable;
     if (enable) {
         if (!ksu_selinux_hide_running) {
             ret = ksu_selinux_hide_enable();
@@ -496,10 +526,13 @@ static int selinux_hide_feature_set(u64 value)
         }
     } else {
         if (ksu_selinux_hide_running) {
-            ksu_selinux_hide_disable();
-            ksu_selinux_hide_running = false;
+            ret = ksu_selinux_hide_disable();
+            if (!ret)
+                ksu_selinux_hide_running = false;
         }
     }
+    if (!ret || ret == -EAGAIN)
+        ksu_selinux_hide_enabled = enable;
     mutex_unlock(&selinux_hide_mutex);
     return ret;
 }
@@ -530,61 +563,92 @@ void ksu_selinux_hide_handle_post_fs_data()
     }
 }
 
-static void hook_selinux_status_open()
+static int hook_selinux_status_open(void)
 {
-    if (orig_sel_open_handle_status)
-        return;
+    if (status_hooked)
+        return 0;
     if (!sel_open_handle_status_slot) {
         struct file_operations *ops = find_kernel_symbol_exact("sel_handle_status_ops");
         if (!ops) {
             pr_err("selinux_hide: sel_handle_status_ops not found, fake status will not work\n");
-            return;
+            return -ENOENT;
         }
         sel_open_handle_status_slot = &ops->open;
     }
     sel_open_handle_status_fn new_fn = my_sel_open_handle_status;
     orig_sel_open_handle_status = *sel_open_handle_status_slot;
-    int ret = ksu_patch_text(sel_open_handle_status_slot, &new_fn, sizeof(new_fn), KSU_PATCH_TEXT_FLUSH_DCACHE);
+    int ret = ksu_patch_text_checked(sel_open_handle_status_slot, &orig_sel_open_handle_status,
+                                    &new_fn, sizeof(new_fn), KSU_PATCH_TEXT_FLUSH_DCACHE);
     if (ret) {
+        if (ret == -EUCLEAN) {
+            status_hooked = true;
+            status_ever_hooked = true;
+            milksu_root_pin_callbacks();
+        }
         pr_err("selinux_hide: init: patch_text sel_open_handle_status err: %d\n", ret);
-        sel_open_handle_status_slot = NULL;
-        orig_sel_open_handle_status = NULL;
+        return ret;
     }
+    status_hooked = true;
+    status_ever_hooked = true;
+    milksu_root_pin_callbacks();
+    return 0;
 }
 
-void __init ksu_selinux_hide_init()
+int __init ksu_selinux_hide_init(void)
 {
-    if (ksu_register_feature_handler(&selinux_hide_handler)) {
-        pr_err("Failed to register selinux_hide feature handler\n");
-    }
+    int ret = ksu_register_feature_handler(&selinux_hide_handler);
+    if (ret)
+        return ret;
+    hide_registered = true;
     if (ksu_late_loaded) {
         initialize_fake_status();
     } else {
         static_key_enable(&fake_status_initialize_key.key);
     }
-    hook_selinux_status_open();
+    ret = hook_selinux_status_open();
+    if (ret) {
+        ksu_unregister_feature_handler(KSU_FEATURE_SELINUX_HIDE);
+        hide_registered = false;
+    }
+    return ret;
 }
 
-void __exit ksu_selinux_hide_exit()
+int ksu_selinux_hide_exit(void)
 {
+    int ret;
+
     mutex_lock(&selinux_hide_mutex);
-    if (ksu_selinux_hide_running) {
-        ksu_selinux_hide_disable();
-        ksu_selinux_hide_running = false;
+    ret = ksu_selinux_hide_unhook();
+    if (ret) {
+        mutex_unlock(&selinux_hide_mutex);
+        return ret;
     }
+    ksu_selinux_hide_running = false;
     mutex_unlock(&selinux_hide_mutex);
-    ksu_unregister_feature_handler(KSU_FEATURE_SELINUX_HIDE);
+    if (hide_registered) {
+        ksu_unregister_feature_handler(KSU_FEATURE_SELINUX_HIDE);
+        hide_registered = false;
+    }
     mutex_lock(&selinux_state.status_lock);
-    if (fake_status)
-        __free_page(fake_status);
-    fake_status = NULL;
+    if (!status_ever_hooked) {
+        if (fake_status)
+            __free_page(fake_status);
+        fake_status = NULL;
+    }
     mutex_unlock(&selinux_state.status_lock);
+    return 0;
+}
+
+bool ksu_selinux_hide_hooks_live(void)
+{
+    return context_hooked || access_hooked || status_hooked ||
+           selinux_setprocattr_hook.entry;
 }
 
 void ksu_selinux_hide_drop_backup_if_unused()
 {
     mutex_lock(&selinux_hide_mutex);
-    if (!ksu_selinux_hide_running && backup_sepolicy) {
+    if (!ksu_selinux_hide_running && !hide_ever_enabled && backup_sepolicy) {
         pr_info("selinux_hide is not enabled - drop backup_sepolicy\n");
         sidtab_destroy(backup_sepolicy->sidtab);
         kfree(backup_sepolicy->sidtab);

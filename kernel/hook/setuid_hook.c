@@ -36,7 +36,8 @@ int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid)
     }
 
     if (ksu_is_allow_uid_for_current(new_uid)) {
-        if (current->seccomp.mode == SECCOMP_MODE_FILTER && current->seccomp.filter) {
+        if (current->seccomp.mode == SECCOMP_MODE_FILTER &&
+            current->seccomp.filter) {
             spin_lock_irq(&current->sighand->siglock);
             ksu_seccomp_allow_cache(current->seccomp.filter, __NR_reboot);
             spin_unlock_irq(&current->sighand->siglock);
@@ -52,12 +53,12 @@ int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid)
     return 0;
 }
 
-void __init ksu_setuid_hook_init(void)
+int __init ksu_setuid_hook_init(void)
 {
-    ksu_kernel_umount_init();
+    return ksu_kernel_umount_init();
 }
 
-void __exit ksu_setuid_hook_exit(void)
+void ksu_setuid_hook_exit(void)
 {
     pr_info("ksu_core_exit\n");
     ksu_kernel_umount_exit();

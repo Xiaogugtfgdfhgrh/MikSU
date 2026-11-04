@@ -5,7 +5,7 @@
 long ksu_adb_root_handle_execve(struct pt_regs *regs);
 long ksu_adb_root_handle_execveat(struct pt_regs *regs);
 
-void ksu_adb_root_init(void);
+int ksu_adb_root_init(void);
 
 void ksu_adb_root_exit(void);
 

@@ -18,6 +18,7 @@ static const char *const feature_names[KSU_FEATURE_MAX] = {
     [KSU_FEATURE_ADB_ROOT] = "adb_root",
     [KSU_FEATURE_SELINUX_HIDE] = "selinux_hide",
     [KSU_FEATURE_SHELL_SU_ADB_ONLY] = "shell_su_adb_only",
+    [KSU_FEATURE_AVC_SPOOF] = "avc_spoof",
 };
 
 // Features forced by boot config. Written only while parsing module params
@@ -287,7 +288,7 @@ void __init ksu_feature_init(void)
     pr_info("feature: feature management initialized\n");
 }
 
-void __exit ksu_feature_exit(void)
+void ksu_feature_exit(void)
 {
     int i;
 

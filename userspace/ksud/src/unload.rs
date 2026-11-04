@@ -1,6 +1,7 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use log::{info, warn};
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 
 use crate::utils;
@@ -107,6 +108,13 @@ fn close_ksu_fds() {
 
 pub fn unload() -> Result<()> {
     info!("unload: starting KernelSU unload sequence");
+
+    crate::unload_policy::ensure_supported(Path::new("/sys/module/kernelsu/parameters"))?;
+    let guard = crate::susfsd::status_json()?;
+    if guard.get("loaded").and_then(serde_json::Value::as_bool) == Some(true) {
+        crate::susfsd::unload()
+            .context("SUSFS still owns root callbacks; unload aborted before stopping Android")?;
+    }
 
     // 0. Switch cgroups so we don't get killed along with our parent shell
     utils::switch_cgroups();

@@ -27,6 +27,7 @@
 #include "supercall/supercall.h"
 #include "infra/symbol_resolver.h"
 #include "preinit/preinit.h"
+#include "milksu_root.h"
 
 static int do_grant_root(void __user *arg)
 {
@@ -970,6 +971,13 @@ long ksu_supercall_handle_ioctl(const struct file *filp, unsigned int cmd, void 
 {
     int i;
 
+    /*
+     * Quarantine may keep module text resident after init fails. No ioctl,
+     * including version detection or a su-session capability, makes it ready.
+     */
+    if (!milksu_root_is_ready())
+        return -EHOSTDOWN;
+
 #ifdef CONFIG_KSU_DEBUG
     pr_info_ratelimited("ksu ioctl: cmd=0x%x from uid=%d\n", cmd, current_uid().val);
 #endif
@@ -995,7 +1003,7 @@ void __init ksu_supercall_dump_commands(void)
 {
     int i;
 
-    pr_info("KernelSU IOCTL Commands:\n");
+    pr_info("MilkSU IOCTL Commands:\n");
     for (i = 0; ksu_ioctl_handlers[i].handler; i++) {
         pr_info("  %-18s = 0x%08x\n", ksu_ioctl_handlers[i].name, ksu_ioctl_handlers[i].cmd);
     }

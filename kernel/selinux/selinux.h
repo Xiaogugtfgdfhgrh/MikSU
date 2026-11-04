@@ -14,7 +14,7 @@
 #define INIT_CONTEXT "u:r:init:s0"
 #define ADBD_CONTEXT "u:r:adbd:s0"
 
-void setup_selinux(const char *, struct cred *);
+int setup_selinux(const char *, struct cred *);
 
 void setenforce(bool);
 

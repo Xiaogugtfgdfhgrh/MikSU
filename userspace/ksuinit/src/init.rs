@@ -95,7 +95,7 @@ pub fn init() -> Result<()> {
     // Setup kernel log first
     setup_kmsg();
 
-    log::info!("Hello, KernelSU!");
+    log::info!("Hello, MilkSU!");
 
     // mount /proc to access kernel interface
     let _dontdrop = prepare_mount();
@@ -132,5 +132,11 @@ fn load_module_from_path(path: &str) -> Result<()> {
     let params = std::fs::read("/ksu_config").unwrap_or_default();
     let params = unsafe { CString::from_vec_unchecked(params) };
     log::info!("load kernelsu with params {params:?}");
-    ksuinit::load_module(&buffer, &params)
+    ksuinit::load_module(&buffer, &params)?;
+    ksuinit::ensure_root_provider_ready()?;
+    anyhow::ensure!(
+        ksuinit::has_kernelsu(),
+        "MilkSU LKM is resident without a ready root interface"
+    );
+    Ok(())
 }

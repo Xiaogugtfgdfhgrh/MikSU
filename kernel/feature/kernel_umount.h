@@ -5,7 +5,7 @@
 #include <linux/list.h>
 #include <linux/rwsem.h>
 
-void ksu_kernel_umount_init(void);
+int ksu_kernel_umount_init(void);
 void ksu_kernel_umount_exit(void);
 
 // Handler function to be called from setresuid hook

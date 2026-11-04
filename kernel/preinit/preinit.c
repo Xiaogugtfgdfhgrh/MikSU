@@ -28,7 +28,7 @@ module_param_named(preinit, ksu_preinit_enabled, bool, 0);
 // gone by then, so it lives in an unlinked shmem file.
 static struct file *ksu_preinit_file;
 
-void __init ksu_preinit_init(void)
+int __init ksu_preinit_init(void)
 {
     size_t size = ksu_preinit_runner_end - ksu_preinit_runner_start;
     struct file *file;
@@ -37,7 +37,7 @@ void __init ksu_preinit_init(void)
 
     if (!ksu_preinit_enabled) {
         pr_info("preinit: disabled\n");
-        return;
+        return 0;
     }
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 19, 0)
     file = shmem_file_setup("ksu_preinit", size, EMPTY_VMA_FLAGS);
@@ -46,18 +46,19 @@ void __init ksu_preinit_init(void)
 #endif
     if (IS_ERR(file)) {
         pr_err("preinit: shmem_file_setup failed: %ld\n", PTR_ERR(file));
-        return;
+        return PTR_ERR(file);
     }
 
     written = kernel_write(file, ksu_preinit_runner_start, size, &pos);
     if (written != size) {
         pr_err("preinit: write runner failed: %zd\n", written);
         fput(file);
-        return;
+        return written < 0 ? written : -EIO;
     }
 
     ksu_preinit_file = file;
     pr_info("preinit: runner staged (%zu bytes)\n", size);
+    return 0;
 }
 
 bool ksu_preinit_enabled_param(void)

@@ -222,6 +222,14 @@ static long ksu_handle_execve_sucompat_common(const char __user **filename_user,
     ret = escape_with_root_profile();
     if (ret) {
         pr_err("escape_with_root_profile failed: %ld\n", ret);
+        ksu_sulog_emit_pending(pending_sucompat, ret, GFP_KERNEL);
+        ksu_close_fd(tmp_fd);
+        PT_REGS_SYSCALL_PARM1(regs) = orig_regs[0];
+        regs->__PT_PARM2_REG = orig_regs[1];
+        regs->__PT_PARM3_REG = orig_regs[2];
+        regs->__PT_SYSCALL_PARM4_REG = orig_regs[3];
+        regs->__PT_PARM5_REG = orig_regs[4];
+        return ret;
     }
     ksu_sulog_emit_pending(pending_sucompat, ret, GFP_KERNEL);
 
@@ -260,14 +268,12 @@ long ksu_handle_execveat_sucompat(const char __user **filename_user, int orig_nr
 }
 
 // sucompat: permitted process can execute 'su' to gain root access.
-void __init ksu_sucompat_init()
+int __init ksu_sucompat_init(void)
 {
-    if (ksu_register_feature_handler(&su_compat_handler)) {
-        pr_err("Failed to register su_compat feature handler\n");
-    }
+    return ksu_register_feature_handler(&su_compat_handler);
 }
 
-void __exit ksu_sucompat_exit()
+void ksu_sucompat_exit(void)
 {
     ksu_unregister_feature_handler(KSU_FEATURE_SU_COMPAT);
 }

@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.DeveloperBoard
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.VolunteerActivism
@@ -169,6 +170,7 @@ fun HomePagerMiuix(
                         )
                         InfoCard(
                             systemInfo = state.systemInfo,
+                            susfsInfo = state.susfsInfo,
                             modifier = Modifier.fillMaxWidth(),
                         )
                         SupportLinks(
@@ -196,7 +198,7 @@ private fun UpdateCard(
     val newVersion = state.latestVersionInfo
     val title = stringResource(id = R.string.module_changelog)
     val updateText = stringResource(id = R.string.module_update)
-    val updateDialog = rememberConfirmDialog(onConfirm = { actions.onOpenUrl(newVersion.downloadUrl) })
+    val updateDialog = rememberConfirmDialog(onConfirm = { actions.onUpdateClick(newVersion) })
 
     AnimatedVisibility(
         visible = state.hasUpdate,
@@ -208,7 +210,7 @@ private fun UpdateCard(
             level = WarningLevel.Notice,
             onClick = {
                 if (newVersion.changelog.isEmpty()) {
-                    actions.onOpenUrl(newVersion.downloadUrl)
+                    actions.onUpdateClick(newVersion)
                 } else {
                     updateDialog.showConfirm(
                         title = title,
@@ -439,20 +441,21 @@ private fun SupportLinks(
     modifier: Modifier = Modifier,
 ) {
     val learnMoreUrl = stringResource(R.string.home_learn_kernelsu_url)
+    val supportUrl = stringResource(R.string.home_support_project_url)
 
     Card(modifier = modifier) {
         ArrowPreference(
-            title = stringResource(R.string.home_support_title),
-            summary = stringResource(R.string.home_support_content),
+            title = stringResource(R.string.home_support_development_title),
+            summary = stringResource(R.string.home_support_development_summary),
             startAction = {
                 Icon(
                     imageVector = Icons.Filled.VolunteerActivism,
-                    contentDescription = stringResource(R.string.home_support_title),
+                    contentDescription = stringResource(R.string.home_support_development_title),
                     modifier = Modifier.padding(end = 6.dp),
                     tint = colorScheme.onBackground,
                 )
             },
-            onClick = { onOpenUrl("https://patreon.com/weishu") },
+            onClick = { onOpenUrl(supportUrl) },
         )
         ArrowPreference(
             title = stringResource(R.string.home_learn_kernelsu),
@@ -474,6 +477,7 @@ private fun SupportLinks(
 private fun InfoCard(
     systemInfo: SystemInfo,
     modifier: Modifier = Modifier,
+    susfsInfo: SusfsHomeInfo = SusfsHomeInfo(),
 ) {
     @Composable
     fun InfoText(
@@ -538,6 +542,13 @@ private fun InfoCard(
                     title = stringResource(R.string.home_manager_version),
                     content = systemInfo.managerVersion,
                 )
+                if (susfsInfo.integrationEnabled) {
+                    InfoText(
+                        icon = Icons.Filled.Shield,
+                        title = stringResource(R.string.home_susfs_version),
+                        content = susfsInfo.summary(),
+                    )
+                }
                 InfoText(
                     icon = Icons.Filled.DeveloperBoard,
                     title = stringResource(R.string.home_kernel),

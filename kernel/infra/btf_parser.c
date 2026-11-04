@@ -69,4 +69,52 @@ int ksu_btf_field(const char *structure, const char *member, u32 kind, u32 size,
     }
     return -ENOENT;
 }
+
+int ksu_btf_avc_sid_regs(unsigned int *source, unsigned int *target)
+{
+    const struct btf *btf = bpf_get_btf_vmlinux();
+    const struct btf_type *function, *prototype, *type;
+    const struct btf_param *params;
+    const char *name;
+    u32 count, i;
+    s32 id;
+
+    if (IS_ERR_OR_NULL(btf))
+        return btf ? PTR_ERR(btf) : -ENOENT;
+    id = btf_find_by_name_kind(btf, "slow_avc_audit", BTF_KIND_FUNC);
+    if (id < 0)
+        return id;
+    function = btf_type_by_id(btf, id);
+    if (!function)
+        return -EINVAL;
+    prototype = btf_type_by_id(btf, function->type);
+    if (!prototype || BTF_INFO_KIND(prototype->info) != BTF_KIND_FUNC_PROTO)
+        return -EINVAL;
+    count = BTF_INFO_VLEN(prototype->info);
+    if (count != 8 && count != 9)
+        return -EOPNOTSUPP;
+    *source = count == 9 ? 1 : 0;
+    *target = *source + 1;
+    params = (const struct btf_param *)(prototype + 1);
+    if (*source) {
+        type = btf_type_skip_modifiers(btf, params[0].type, NULL);
+        if (!type || BTF_INFO_KIND(type->info) != BTF_KIND_PTR)
+            return -EOPNOTSUPP;
+        type = btf_type_skip_modifiers(btf, type->type, NULL);
+        if (!type || BTF_INFO_KIND(type->info) != BTF_KIND_STRUCT)
+            return -EOPNOTSUPP;
+        name = btf_name_by_offset(btf, type->name_off);
+        if (!name || strcmp(name, "selinux_state"))
+            return -EOPNOTSUPP;
+    }
+    for (i = *source; i <= *target; i++) {
+        name = btf_name_by_offset(btf, params[i].name_off);
+        if (!name || strcmp(name, i == *source ? "ssid" : "tsid"))
+            return -EOPNOTSUPP;
+        type = btf_type_skip_modifiers(btf, params[i].type, NULL);
+        if (!type || BTF_INFO_KIND(type->info) != BTF_KIND_INT || type->size != sizeof(u32))
+            return -EOPNOTSUPP;
+    }
+    return 0;
+}
 #endif

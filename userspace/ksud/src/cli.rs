@@ -13,7 +13,7 @@ use crate::{
     utils,
 };
 
-/// KernelSU userspace cli
+/// MilkSU userspace cli
 #[derive(Parser, Debug)]
 #[command(author, version = defs::FULL_VERSION, about, long_about = None)]
 struct Args {
@@ -23,7 +23,31 @@ struct Args {
 
 #[derive(clap::Subcommand, Debug)]
 enum Commands {
-    /// Manage KernelSU modules
+    /// Verify or install a complete active-slot image transaction
+    Images {
+        #[command(subcommand)]
+        command: crate::image_transaction::TransactionCommand,
+    },
+
+    /// Manage the bundled SUSFS guard
+    Susfs {
+        #[command(subcommand)]
+        command: Susfs,
+    },
+
+    /// Manage kernel patch modules
+    Kpm {
+        #[command(subcommand)]
+        command: crate::kpm::KpmCommand,
+    },
+
+    /// Inspect or transform the kernel of a boot image
+    KpmImage {
+        #[command(subcommand)]
+        command: crate::kpm_image::ImageCommand,
+    },
+
+    /// Manage MilkSU-compatible root modules
     Module {
         #[command(subcommand)]
         command: Module,
@@ -77,7 +101,7 @@ enum Commands {
         params: Vec<String>,
     },
 
-    /// Install KernelSU userspace component to system
+    /// Install MilkSU userspace component to system
     Install {
         #[arg(long, default_value = None)]
         libadbroot: Option<PathBuf>,
@@ -86,10 +110,10 @@ enum Commands {
         data_path: Option<PathBuf>,
     },
 
-    /// Unload KernelSU kernel module (LKM Only)
+    /// Unload the root module when its backend supports hot removal
     Unload,
 
-    /// Uninstall KernelSU modules and itself(LKM Only)
+    /// Uninstall MilkSU modules and root
     Uninstall {
         #[arg(long, default_value_t = String::from(defs::DEFAULT_PACKAGE_NAME))]
         package_name: String,
@@ -113,13 +137,13 @@ enum Commands {
         command: Feature,
     },
 
-    /// Patch boot or init_boot images to apply KernelSU
+    /// Patch boot or init_boot images to apply MilkSU
     BootPatch(BootPatchArgs),
 
-    /// Restore boot or init_boot images patched by KernelSU
+    /// Restore boot or init_boot images patched by MilkSU
     BootRestore(BootRestoreArgs),
 
-    /// Patch KernelSU into a boot image
+    /// Patch MilkSU into a boot image
     ///
     /// Always operates on a boot image; never selects init_boot or vendor_boot.
     BootPatchV2(BootPatchV2Args),
@@ -153,6 +177,34 @@ enum Commands {
         #[command(subcommand)]
         command: Initrc,
     },
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum Susfs {
+    Load {
+        #[arg(long)]
+        kmi: Option<String>,
+    },
+    Unload,
+    Status,
+    Support,
+    Features,
+    Version,
+    Variant,
+    Autoload {
+        #[command(subcommand)]
+        action: SusfsAutoload,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum SusfsAutoload {
+    Enable {
+        #[arg(long)]
+        kmi: Option<String>,
+    },
+    Disable,
+    Status,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -458,8 +510,8 @@ enum Feature {
     /// Load configuration from file and apply to kernel
     Load,
 
-    /// Save current kernel feature states to file
-    Save,
+    /// Save one feature, or all current feature states when no id is specified
+    Save { id: Option<String> },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -507,7 +559,7 @@ pub fn run() -> Result<()> {
     android_logger::init_once(
         Config::default()
             .with_max_level(crate::debug_select!(LevelFilter::Trace, LevelFilter::Info))
-            .with_tag("KernelSU"),
+            .with_tag("MilkSU"),
     );
 
     ksucalls::setup_sigsys_handler();
@@ -528,6 +580,26 @@ pub fn run() -> Result<()> {
     log::info!("command: {:?}", cli.command);
 
     let result = match cli.command {
+        Commands::Images { command } => crate::image_transaction::run(command),
+        Commands::Susfs { command } => match command {
+            Susfs::Load { kmi } => crate::susfsd::load(kmi.as_deref()),
+            Susfs::Unload => crate::susfsd::unload(),
+            Susfs::Status => crate::susfsd::status(),
+            Susfs::Support => crate::susfsd::show_features(true),
+            Susfs::Features => crate::susfsd::show_features(false),
+            Susfs::Version => crate::susfsd::show_version(),
+            Susfs::Variant => crate::susfsd::show_variant(),
+            Susfs::Autoload { action } => match action {
+                SusfsAutoload::Enable { kmi } => crate::susfsd::set_autoload(true, kmi.as_deref()),
+                SusfsAutoload::Disable => crate::susfsd::set_autoload(false, None),
+                SusfsAutoload::Status => {
+                    println!("{}", crate::susfsd::autoload_enabled()?);
+                    Ok(())
+                }
+            },
+        },
+        Commands::Kpm { command } => crate::kpm::run(command),
+        Commands::KpmImage { command } => crate::kpm_image::run_image_command(command),
         Commands::PostFsData => init_event::on_post_fs_data(),
         Commands::BootCompleted => {
             init_event::on_boot_completed();
@@ -715,7 +787,7 @@ pub fn run() -> Result<()> {
             }
             Feature::Check { id } => crate::feature::check_feature(&id),
             Feature::Load => crate::feature::load_config_and_apply(),
-            Feature::Save => crate::feature::save_config(),
+            Feature::Save { id } => crate::feature::save_config(id.as_deref()),
         },
 
         Commands::Debug { command } => match command {

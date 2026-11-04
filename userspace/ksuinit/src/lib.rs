@@ -548,3 +548,12 @@ fn has_kernelsu_v2() -> bool {
 pub fn has_kernelsu() -> bool {
     has_kernelsu_v2() || has_kernelsu_legacy()
 }
+
+/// A resident module may be quarantined after a callback restoration failure.
+pub fn ensure_root_provider_ready() -> Result<()> {
+    anyhow::ensure!(
+        has_kernelsu_v2(),
+        "MilkSU LKM is resident without a ready root interface"
+    );
+    Ok(())
+}

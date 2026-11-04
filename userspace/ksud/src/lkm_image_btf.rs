@@ -450,6 +450,42 @@ impl<'a> BtfCandidate<'a> {
         Ok(())
     }
 
+    fn validate_loading_module_values(&self) -> Result<()> {
+        let mut values = BTreeSet::new();
+        for enumeration in self.types.iter().filter(|btf_type| {
+            matches!(btf_type.kind, BTF_KIND_ENUM | BTF_KIND_ENUM64)
+                && self.string(btf_type.name_offset) == Some("kernel_load_data_id")
+        }) {
+            let stride = if enumeration.kind == BTF_KIND_ENUM64 {
+                12
+            } else {
+                8
+            };
+            for index in 0..usize::from(enumeration.vlen) {
+                let offset = enumeration.payload_offset + index * stride;
+                let name = read_u32(self.data, offset)
+                    .ok_or_else(|| anyhow::anyhow!("BTF enum member is truncated"))?;
+                if self.string(name) != Some("LOADING_MODULE") {
+                    continue;
+                }
+                let low = read_u32(self.data, offset + 4)
+                    .ok_or_else(|| anyhow::anyhow!("BTF enum value is truncated"))?;
+                let high = if enumeration.kind == BTF_KIND_ENUM64 {
+                    read_u32(self.data, offset + 8)
+                        .ok_or_else(|| anyhow::anyhow!("BTF enum64 value is truncated"))?
+                } else {
+                    0
+                };
+                values.insert((u64::from(high) << 32) | u64::from(low));
+            }
+        }
+        ensure!(
+            values.len() <= 1,
+            "BTF contains conflicting LOADING_MODULE values"
+        );
+        Ok(())
+    }
+
     pub const fn file_offset(&self) -> usize {
         self.file_offset
     }
@@ -461,6 +497,7 @@ impl<'a> BtfCandidate<'a> {
     pub fn to_kernel_btf(&self) -> Result<KernelBtf> {
         let load_info = self.load_info_layout()?;
         self.validate_function_abis()?;
+        self.validate_loading_module_values()?;
         Ok(KernelBtf {
             file_offset: self.file_offset,
             size: self.size(),

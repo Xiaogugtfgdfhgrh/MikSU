@@ -76,6 +76,7 @@ pub fn insmod(module: &Path, params: &[String]) -> Result<()> {
         ksuinit::load_module(&module_data, &cparams)
     }
     .with_context(|| format!("load module failed: {}", module.display()))?;
+    ksuinit::ensure_root_provider_ready()?;
 
     println!("Loaded kernel module: {}", module.display());
     Ok(())

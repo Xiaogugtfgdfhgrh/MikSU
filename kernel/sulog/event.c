@@ -275,7 +275,7 @@ int __init ksu_sulog_events_init(void)
     return 0;
 }
 
-void __exit ksu_sulog_events_exit(void)
+void ksu_sulog_events_exit(void)
 {
     ksu_event_queue_destroy(&sulog_queue);
 }

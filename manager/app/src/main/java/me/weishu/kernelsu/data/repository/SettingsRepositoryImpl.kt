@@ -9,6 +9,7 @@ import com.materialkolor.PaletteStyle
 import com.materialkolor.dynamiccolor.ColorSpec
 import com.topjohnwu.superuser.ShellUtils
 import me.weishu.kernelsu.Natives
+import me.weishu.kernelsu.BuildConfig
 import me.weishu.kernelsu.ksuApp
 import me.weishu.kernelsu.magica.BootCompletedReceiver
 import me.weishu.kernelsu.ui.UiMode
@@ -43,8 +44,8 @@ class SettingsRepositoryImpl : SettingsRepository {
         set(value) = prefs.edit { putString("ui_mode", value) }
 
     override var checkUpdate: Boolean
-        get() = prefs.getBoolean("check_update", true)
-        set(value) = prefs.edit { putBoolean("check_update", value) }
+        get() = BuildConfig.CORE_UPDATE_ENABLED && prefs.getBoolean("check_update", true)
+        set(value) = prefs.edit { putBoolean("check_update", value && BuildConfig.CORE_UPDATE_ENABLED) }
 
     override var checkModuleUpdate: Boolean
         get() = prefs.getBoolean("module_check_update", true)
@@ -203,6 +204,13 @@ class SettingsRepositoryImpl : SettingsRepository {
 
     override fun setSelinuxHideEnabled(enabled: Boolean): Int = Natives.setSelinuxHideEnabled(enabled)
 
+    override suspend fun getAvcSpoofStatus(): String = getFeatureStatus("avc_spoof")
+
+    override suspend fun getAvcSpoofValue(): Long? = getFeatureValue("avc_spoof")
+
+    override fun setAvcSpoofEnabled(enabled: Boolean): Boolean =
+        execKsud("feature set avc_spoof ${if (enabled) 1 else 0}", true)
+
     override suspend fun getSulogStatus(): String = getFeatureStatus("sulog")
 
     override suspend fun getSulogPersistValue(): Long? = getFeaturePersistValue("sulog")
@@ -240,7 +248,8 @@ class SettingsRepositoryImpl : SettingsRepository {
 
     override fun isLkmMode(): Boolean = Natives.isLkmMode
 
-    override fun execKsudFeatureSave() {
-        execKsud("feature save", true)
+    override fun execKsudFeatureSave(feature: String): Boolean {
+        require(feature in setOf("su_compat", "kernel_umount", "selinux_hide", "avc_spoof", "sulog", "adb_root", "shell_su_adb_only"))
+        return execKsud("feature save $feature", true)
     }
 }

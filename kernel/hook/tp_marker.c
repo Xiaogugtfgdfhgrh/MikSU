@@ -12,7 +12,12 @@
 // Tracepoint registration count management
 // == 1: just us
 // >  1: someone else is also using syscall tracepoint e.g. ftrace
-static int tracepoint_reg_count = 0;
+#ifdef CONFIG_KRETPROBES
+static int tracepoint_reg_count;
+#else
+/* Without registration probes, never clear another tracer's process flags. */
+static int tracepoint_reg_count = 2;
+#endif
 static DEFINE_SPINLOCK(tracepoint_reg_lock);
 
 int ksu_tp_marker_reg_count(void)
@@ -90,7 +95,8 @@ void ksu_mark_running_process_locked(void)
         bool is_shell = uid == 2000;
         // before boot completed, we shall mark init for marking zygote
         bool is_init = t->pid == 1;
-        if (ksu_root_process || is_zygote_process || is_shell || is_init || ksu_is_allow_uid(uid)) {
+        if (ksu_root_process || is_zygote_process || is_shell || is_init ||
+            ksu_is_allow_uid(uid)) {
             ksu_set_task_tracepoint_flag(t);
         } else {
             ksu_clear_task_tracepoint_flag(t);

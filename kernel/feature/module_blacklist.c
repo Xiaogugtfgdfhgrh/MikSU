@@ -47,7 +47,7 @@ static const struct kernel_param_ops block_modules_param_ops = {
 module_param_cb(block_modules, &block_modules_param_ops, NULL, 0);
 
 // Merge the configured names into the kernel's native module_blacklist.
-void __init ksu_module_blacklist_init(void)
+int __init ksu_module_blacklist_init(void)
 {
     char **native_blacklist;
     const char *existing;
@@ -55,12 +55,12 @@ void __init ksu_module_blacklist_init(void)
     size_t existing_len;
 
     if (!block_modules[0])
-        return;
+        return 0;
 
     native_blacklist = (char **)find_kernel_symbol_exact("module_blacklist");
     if (!native_blacklist) {
         pr_warn("module_blacklist: symbol not found, cannot block modules\n");
-        return;
+        return -ENOENT;
     }
 
     existing = *native_blacklist;
@@ -70,7 +70,7 @@ void __init ksu_module_blacklist_init(void)
     merged = kasprintf(GFP_KERNEL, "%s%s%s", existing_len ? existing : "", existing_len ? "," : "", block_modules);
     if (!merged) {
         pr_err("module_blacklist: cannot allocate blacklist\n");
-        return;
+        return -ENOMEM;
     }
 
     // Release-publish: pairs with the address dependency in the lockless
@@ -81,9 +81,10 @@ void __init ksu_module_blacklist_init(void)
     // in flight observes the new list right away (suggested by @backslashxx).
     kick_all_cpus_sync();
     pr_info("module_blacklist: blocking modules: %s\n", merged);
+    return 0;
 }
 
-void __exit ksu_module_blacklist_exit(void)
+void ksu_module_blacklist_exit(void)
 {
     // Intentionally does NOT restore the original module_blacklist pointer.
     // The module loader reads module_blacklist in blacklisted() without any

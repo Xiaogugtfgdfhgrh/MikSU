@@ -46,6 +46,9 @@ interface SettingsRepository {
     suspend fun getSelinuxHideStatus(): String
     fun isSelinuxHideEnabled(): Boolean
     fun setSelinuxHideEnabled(enabled: Boolean): Int
+    suspend fun getAvcSpoofStatus(): String
+    suspend fun getAvcSpoofValue(): Long?
+    fun setAvcSpoofEnabled(enabled: Boolean): Boolean
 
     suspend fun getSulogStatus(): String
     suspend fun getSulogPersistValue(): Long?
@@ -66,5 +69,5 @@ interface SettingsRepository {
 
     fun isLkmMode(): Boolean
 
-    fun execKsudFeatureSave()
+    fun execKsudFeatureSave(feature: String): Boolean
 }

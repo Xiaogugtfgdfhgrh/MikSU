@@ -1,13 +1,16 @@
 package me.weishu.kernelsu.ui.viewmodel
 
+import android.content.Context
 import android.os.Build
 import android.system.Os
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -15,11 +18,18 @@ import me.weishu.kernelsu.BuildConfig
 import me.weishu.kernelsu.Natives
 import me.weishu.kernelsu.data.repository.SettingsRepository
 import me.weishu.kernelsu.data.repository.SettingsRepositoryImpl
+import me.weishu.kernelsu.data.system.SystemBackends
 import me.weishu.kernelsu.getKernelVersion
 import me.weishu.kernelsu.ksuApp
 import me.weishu.kernelsu.ui.screen.home.HomeUiState
+import me.weishu.kernelsu.ui.screen.home.HomeManagerUpdates
 import me.weishu.kernelsu.ui.screen.home.SystemInfo
+import me.weishu.kernelsu.ui.screen.home.SusfsHomeInfo
+import me.weishu.kernelsu.ui.screen.home.SusfsHomeInfoQuery
+import me.weishu.kernelsu.ui.screen.home.SusfsHomeSnapshot
 import me.weishu.kernelsu.ui.screen.home.getManagerVersion
+import me.weishu.kernelsu.ui.screen.home.susfsHomeSnapshots
+import me.weishu.kernelsu.ui.screen.kpm.KpmUiState
 import me.weishu.kernelsu.ui.util.checkNewVersion
 import me.weishu.kernelsu.ui.util.getSELinuxStatusRaw
 import me.weishu.kernelsu.ui.util.module.LatestVersionInfo
@@ -30,16 +40,66 @@ class HomeViewModel(
     private val settingsRepo: SettingsRepository = SettingsRepositoryImpl()
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(buildState())
+    private val integrationPreferences = ksuApp.getSharedPreferences("system_integration", Context.MODE_PRIVATE)
+    private val susfsInfoQuery = SusfsHomeInfoQuery(SystemBackends.executor)
+    private val susfsRefreshRequests = MutableStateFlow(0)
+    private var susfsObserver: Job? = null
+    private var refreshJob: Job? = null
+    private val _uiState = MutableStateFlow(
+        buildState().copy(
+            susfsInfo = SusfsHomeInfo(
+                integrationEnabled = integrationPreferences.getBoolean("home_susfs_enabled", false),
+            ),
+        ),
+    )
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
     fun refresh() {
-        viewModelScope.launch {
+        refreshSusfsInfo()
+        refreshJob?.cancel()
+        refreshJob = viewModelScope.launch {
             val baseState = withContext(Dispatchers.IO) { buildState() }
-            _uiState.update { baseState }
-            if (baseState.checkUpdateEnabled) {
+            _uiState.update {
+                baseState.copy(
+                    susfsInfo = it.susfsInfo,
+                    latestVersionInfo = HomeManagerUpdates.offer(
+                        it.latestVersionInfo, baseState.currentManagerVersionCode,
+                        updatesEnabled(), BuildConfig.MILKSU_UPDATE_URL,
+                    ),
+                )
+            }
+            if (updatesEnabled()) {
                 val latestVersionInfo = withContext(Dispatchers.IO) { checkNewVersion() }
-                _uiState.update { it.copy(latestVersionInfo = latestVersionInfo) }
+                _uiState.update {
+                    it.copy(
+                        latestVersionInfo = HomeManagerUpdates.offer(
+                            it.latestVersionInfo, it.currentManagerVersionCode,
+                            updatesEnabled(), BuildConfig.MILKSU_UPDATE_URL, latestVersionInfo,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun updatesEnabled() =
+        BuildConfig.CORE_UPDATE_ENABLED && !BuildConfig.IS_PR_BUILD && settingsRepo.checkUpdate
+
+    fun refreshSusfsInfo() {
+        susfsRefreshRequests.update { it + 1 }
+    }
+
+    fun observeSusfs(integrationState: StateFlow<KpmUiState>) {
+        if (susfsObserver?.isActive == true) return
+        susfsObserver = viewModelScope.launch {
+            susfsHomeSnapshots(integrationState, susfsRefreshRequests).collectLatest { snapshot ->
+                _uiState.update { it.copy(susfsInfo = it.susfsInfo.merge(snapshot)) }
+                if (snapshot.operational) {
+                    val variant = withContext(Dispatchers.IO) { susfsInfoQuery.variant() }
+                    if (SusfsHomeSnapshot.from(integrationState.value) == snapshot) {
+                        _uiState.update { it.copy(susfsInfo = it.susfsInfo.copy(variant = variant)) }
+                    }
+                }
             }
         }
     }

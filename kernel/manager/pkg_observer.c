@@ -145,13 +145,21 @@ int ksu_observer_init(void)
         return PTR_ERR(g);
 
     ret = watch_one_dir(&g_watch);
+    if (ret) {
+        fsnotify_put_group(g);
+        g = NULL;
+        return ret;
+    }
     pr_info("observer init done\n");
     return 0;
 }
 
-void __exit ksu_observer_exit(void)
+void ksu_observer_exit(void)
 {
+    if (IS_ERR_OR_NULL(g))
+        return;
     unwatch_one_dir(&g_watch);
     fsnotify_put_group(g);
+    g = NULL;
     pr_info("observer exit done\n");
 }

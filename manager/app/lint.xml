@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<lint>
+    <!--
+        MilkSU 0.1 officially supports English (default values, en-US) and
+        Simplified Chinese (values-zh-rCN, zh-CN in the system language picker).
+        Preserve all inherited locale resources. Missing entries intentionally
+        fall back to default English; incomplete translation coverage remains
+        visible as a warning, including inherited and newly added strings.
+        This policy changes only MissingTranslation. All other lint severities
+        and abortOnError remain unchanged; no issues are hidden by a baseline.
+    -->
+    <issue id="MissingTranslation" severity="warning" />
+</lint>

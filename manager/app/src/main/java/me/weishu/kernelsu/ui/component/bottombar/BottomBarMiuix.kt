@@ -5,11 +5,13 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Cottage
 import androidx.compose.material.icons.rounded.Extension
+import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.runtime.Composable
@@ -21,8 +23,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import me.weishu.kernelsu.Natives
 import me.weishu.kernelsu.R
+import me.weishu.kernelsu.data.model.MainTab
 import me.weishu.kernelsu.ui.LocalMainPagerState
 import me.weishu.kernelsu.ui.component.FloatingBottomBar
 import me.weishu.kernelsu.ui.component.FloatingBottomBarItem
@@ -47,14 +49,11 @@ fun BottomBarMiuix(
     navigationBadge: NavigationBadgeState,
     modifier: Modifier,
 ) {
-    val fullFeatured = Natives.isFullFeatured()
-    if (!fullFeatured) return
-
     val mainState = LocalMainPagerState.current
     val enableFloatingBottomBar = LocalEnableFloatingBottomBar.current
     val enableFloatingBottomBarBlur = LocalEnableFloatingBottomBarBlur.current
 
-    val items = BottomBarDestination.entries.map { destination ->
+    val items = mainState.tabs.map { BottomBarDestination.entries[it.ordinal] }.map { destination ->
         NavigationItem(
             label = stringResource(destination.label),
             icon = destination.icon,
@@ -75,7 +74,7 @@ fun BottomBarMiuix(
                             onClick = {
                                 mainState.animateToPage(index)
                             },
-                            badge = navigationBadgeFor(index, navigationBadge),
+                            badge = navigationBadgeFor(mainState.tabs[index], navigationBadge),
                         )
                     }
                 }
@@ -89,7 +88,8 @@ fun BottomBarMiuix(
                 .pointerInput(Unit) {
                     detectTapGestures { }
                 }
-                .padding(start = 28.dp, end = 28.dp, bottom = bottomPadding),
+                .padding(start = 12.dp, end = 12.dp, bottom = bottomPadding)
+                .fillMaxWidth(),
             selectedIndex = mainState.selectedPage,
             onSelected = { mainState.animateToPage(it) },
             backdrop = backdrop,
@@ -102,11 +102,11 @@ fun BottomBarMiuix(
                     onClick = {
                         activateTab(index)
                     },
-                    modifier = Modifier.defaultMinSize(minWidth = 76.dp)
+                    modifier = Modifier.defaultMinSize(minWidth = 48.dp)
                 ) {
                     // Icon and label take LocalContentColor so the FloatingBottomBar backdrop copy
                     // can recolor them to the accent tone inside the indicator pill.
-                    val badge = navigationBadgeFor(index, navigationBadge, floating = true)
+                    val badge = navigationBadgeFor(mainState.tabs[index], navigationBadge, floating = true)
                     val icon: @Composable () -> Unit = {
                         Icon(
                             imageVector = item.icon,
@@ -124,7 +124,7 @@ fun BottomBarMiuix(
                         lineHeight = 14.sp,
                         maxLines = 1,
                         softWrap = false,
-                        overflow = TextOverflow.Visible
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -137,17 +137,18 @@ enum class BottomBarDestination(
     val icon: ImageVector,
 ) {
     Home(R.string.home, Icons.Rounded.Cottage),
+    Kpm(R.string.kpm_title, Icons.Rounded.Memory),
     SuperUser(R.string.superuser, Icons.Rounded.Security),
     Module(R.string.module, Icons.Rounded.Extension),
     Setting(R.string.settings, Icons.Rounded.Settings)
 }
 
 internal fun navigationBadgeFor(
-    index: Int,
+    tab: MainTab,
     state: NavigationBadgeState,
     floating: Boolean = false,
 ): (@Composable () -> Unit)? {
-    val badge = badgeFor(index, state) ?: return null
+    val badge = badgeFor(tab, state) ?: return null
     return when (badge.tone) {
         BadgeTone.Alert -> {
             {

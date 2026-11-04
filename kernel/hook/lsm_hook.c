@@ -11,6 +11,7 @@
 #include "hook/lsm_hook.h"
 #include "hook/patch_memory.h"
 #include "klog.h" // IWYU pragma: keep
+#include "milksu_root.h"
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
 #include "linux/static_call.h"
 #endif
@@ -61,12 +62,13 @@ static void ksu_lsm_hook_untrack(struct ksu_lsm_hook *hook)
     }
 }
 
-static int ksu_lsm_hook_patch_slot(void **slot, void *value)
+static int ksu_lsm_hook_patch_slot(void **slot, void *expected, void *value)
 {
     void *patched = value;
     int ret;
 
-    ret = ksu_patch_text(slot, &patched, sizeof(patched), KSU_PATCH_TEXT_FLUSH_DCACHE);
+    ret = ksu_patch_text_checked(slot, &expected, &patched, sizeof(patched),
+                                KSU_PATCH_TEXT_FLUSH_DCACHE);
     if (!ret)
         smp_wmb();
 
@@ -192,8 +194,8 @@ int ksu_lsm_hook(struct ksu_lsm_hook *hook)
         int j;
         for (j = 0; j < ksu_lsm_hook_count; j++) {
             if (ksu_lsm_hook_entries[j].hook->replacement == current_origin) {
-                current_origin = ksu_lsm_hook_entries[j].hook->original;
-                break;
+                ret = -EBUSY;
+                goto out_unlock;
             }
         }
 
@@ -254,14 +256,23 @@ int ksu_lsm_hook(struct ksu_lsm_hook *hook)
         goto out_unlock;
     }
 
-    if (ksu_lsm_hook_patch_slot(selected_slot, hook->replacement)) {
+    WRITE_ONCE(hook->original, selected_origin);
+    smp_wmb();
+    ret = ksu_lsm_hook_patch_slot(selected_slot, selected_origin, hook->replacement);
+    if (ret) {
         pr_err("lsm_hook: failed to patch %s\n", hook->head_name ?: "unknown");
-        ret = -EFAULT;
+        if (ret == -EUCLEAN) {
+            hook->entry = selected_entry;
+            hook->scall = selected_scall;
+            hook->original = selected_origin;
+            milksu_root_pin_callbacks();
+            goto out_unlock;
+        }
         goto out_untrack;
     }
 
     if (ksu_lsm_hook_update_scall(selected_scall, hook->replacement)) {
-        if (ksu_lsm_hook_patch_slot(selected_slot, selected_origin)) {
+        if (ksu_lsm_hook_patch_slot(selected_slot, hook->replacement, selected_origin)) {
             pr_err("lsm_hook: failed to roll back %s after static call update failure\n", hook->head_name ?: "unknown");
         }
         ret = -EFAULT;
@@ -274,6 +285,7 @@ int ksu_lsm_hook(struct ksu_lsm_hook *hook)
     hook->entry = selected_entry;
     hook->scall = selected_scall;
     hook->original = selected_origin;
+    milksu_root_pin_callbacks();
     pr_info("lsm_hook: patched %s hook slot %px from %px to %px\n", hook->head_name ?: "unknown", selected_slot,
             selected_origin, hook->replacement);
 #else
@@ -300,8 +312,8 @@ int ksu_lsm_hook(struct ksu_lsm_hook *hook)
             int j;
             for (j = 0; j < ksu_lsm_hook_count; j++) {
                 if (ksu_lsm_hook_entries[j].hook->replacement == current_origin) {
-                    current_origin = ksu_lsm_hook_entries[j].hook->original;
-                    break;
+                    ret = -EBUSY;
+                    goto out_unlock;
                 }
             }
             if (current_origin == hook->replacement) {
@@ -343,7 +355,12 @@ int ksu_lsm_hook(struct ksu_lsm_hook *hook)
                     hook->list.head = head;
                     hook->list.list.next = NULL;
                     hook->list.list.pprev = &head->first;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+                    static const struct lsm_id ksu_lsm_id = { .name = "ksu", .id = 0 };
+                    hook->list.lsmid = &ksu_lsm_id;
+#else
                     hook->list.lsm = "ksu";
+#endif
                     *(void **)((char *)selected_entry + hook->hook_offset) = hook->replacement;
                     selected_slot = (void **)&head->first;
                     selected_origin = NULL;
@@ -365,22 +382,30 @@ int ksu_lsm_hook(struct ksu_lsm_hook *hook)
         goto out_unlock;
     }
 
+    WRITE_ONCE(hook->original, selected_origin);
+    smp_wmb();
     if (selected_origin) {
         pr_info("patch func addr\n");
-        ret = ksu_lsm_hook_patch_slot(selected_slot, hook->replacement);
+        ret = ksu_lsm_hook_patch_slot(selected_slot, selected_origin, hook->replacement);
     } else {
         pr_info("patch head->first\n");
-        ret = ksu_lsm_hook_patch_slot(selected_slot, &hook->list);
+        ret = ksu_lsm_hook_patch_slot(selected_slot, NULL, &hook->list);
     }
 
     if (ret) {
         pr_err("lsm_hook: failed to patch %s\n", hook->head_name ?: "unknown");
-        ret = -EFAULT;
+        if (ret == -EUCLEAN) {
+            hook->entry = selected_entry;
+            hook->original = selected_origin;
+            milksu_root_pin_callbacks();
+            goto out_unlock;
+        }
         goto out_untrack;
     }
 
     hook->entry = selected_entry;
     hook->original = selected_origin;
+    milksu_root_pin_callbacks();
     pr_info("lsm_hook: patched %s hook slot %px from %px to %px\n", hook->head_name ?: "unknown", selected_slot,
             selected_origin, hook->replacement);
 #endif
@@ -393,9 +418,14 @@ out_unlock:
     return ret;
 }
 
-void ksu_lsm_unhook(struct ksu_lsm_hook *hook)
+int ksu_lsm_unhook(struct ksu_lsm_hook *hook)
 {
     void **slot;
+    void *expected;
+    int ret;
+
+    if (!hook)
+        return -EINVAL;
     mutex_lock(&ksu_lsm_hook_lock);
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
@@ -404,7 +434,7 @@ void ksu_lsm_unhook(struct ksu_lsm_hook *hook)
     if (!hook->entry) {
 #endif
         mutex_unlock(&ksu_lsm_hook_lock);
-        return;
+        return 0;
     }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
@@ -418,18 +448,24 @@ void ksu_lsm_unhook(struct ksu_lsm_hook *hook)
         pr_info("unhook patch slot\n");
     }
 #endif
-    if (ksu_lsm_hook_patch_slot(slot, hook->original)) {
+    expected = hook->replacement;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
+    if (hook->entry == &hook->list)
+        expected = &hook->list;
+#endif
+    ret = ksu_lsm_hook_patch_slot(slot, expected, hook->original);
+    if (ret) {
         pr_err("lsm_hook: failed to restore %s\n", hook->head_name ?: "unknown");
         mutex_unlock(&ksu_lsm_hook_lock);
-        return;
+        return ret;
     }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
     if (ksu_lsm_hook_update_scall(hook->scall, hook->original)) {
-        if (ksu_lsm_hook_patch_slot(slot, hook->replacement))
+        if (ksu_lsm_hook_patch_slot(slot, hook->original, hook->replacement))
             pr_err("lsm_hook: failed to reapply %s after static call restore failure\n", hook->head_name ?: "unknown");
         mutex_unlock(&ksu_lsm_hook_lock);
-        return;
+        return -EIO;
     }
 #endif
 
@@ -441,6 +477,7 @@ void ksu_lsm_unhook(struct ksu_lsm_hook *hook)
     hook->scall = NULL;
 #endif
     mutex_unlock(&ksu_lsm_hook_lock);
+    return 0;
 }
 
 int ksu_register_lsm_hook(struct ksu_lsm_hook *hook)
@@ -448,9 +485,9 @@ int ksu_register_lsm_hook(struct ksu_lsm_hook *hook)
     return ksu_lsm_hook(hook);
 }
 
-void ksu_unregister_lsm_hook(struct ksu_lsm_hook *hook)
+int ksu_unregister_lsm_hook(struct ksu_lsm_hook *hook)
 {
-    ksu_lsm_unhook(hook);
+    return ksu_lsm_unhook(hook);
 }
 
 void __init ksu_lsm_hook_init(void)
@@ -458,7 +495,7 @@ void __init ksu_lsm_hook_init(void)
     pr_info("lsm_hook: init, tracked hooks=%d\n", READ_ONCE(ksu_lsm_hook_count));
 }
 
-void __exit ksu_lsm_hook_exit(void)
+int ksu_lsm_hook_exit(void)
 {
     struct ksu_lsm_hook *hooks[ARRAY_SIZE(ksu_lsm_hook_entries)];
     int count;
@@ -470,6 +507,15 @@ void __exit ksu_lsm_hook_exit(void)
         hooks[i] = ksu_lsm_hook_entries[i].hook;
     mutex_unlock(&ksu_lsm_hook_lock);
 
-    for (i = count - 1; i >= 0; i--)
-        ksu_lsm_unhook(hooks[i]);
+    for (i = count - 1; i >= 0; i--) {
+        int ret = ksu_lsm_unhook(hooks[i]);
+        if (ret)
+            return ret;
+    }
+    return 0;
+}
+
+bool ksu_lsm_hooks_live(void)
+{
+    return READ_ONCE(ksu_lsm_hook_count) != 0;
 }

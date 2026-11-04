@@ -29,8 +29,6 @@ mod android {
     use regex_lite::Regex;
     use rustix::process::getuid;
     use std::fs::{File, OpenOptions};
-    use std::io::Write;
-    use std::os::fd::AsRawFd;
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -39,7 +37,7 @@ mod android {
 
     pub(super) fn ensure_gki_kernel() -> Result<()> {
         let version = get_kernel_version()?;
-        let is_gki = version.0 == 5 && version.1 >= 10 || version.2 > 5;
+        let is_gki = version.0 > 5 || version.0 == 5 && version.1 >= 10;
         ensure!(is_gki, "only support GKI kernel");
         Ok(())
     }
@@ -200,22 +198,22 @@ mod android {
         Ok(())
     }
 
-    pub(super) fn flash_partition(partition: &str, data: &[u8]) -> Result<()> {
-        let mut blk = std::fs::OpenOptions::new()
-            .write(true)
-            .truncate(false)
-            .create(false)
-            .open(partition)
-            .with_context(|| format!("open {partition}"))?;
-        unsafe {
-            const BLKROSET: i32 = libc::_IO(0x12, 93);
-            let mut val: libc::c_int = 0;
-            if libc::ioctl(blk.as_raw_fd(), BLKROSET, &raw mut val) != 0 {
-                bail!("Failed to set rw for {partition}: {}", *libc::__errno());
-            }
-        }
-        blk.write_all(data).context("flash boot failed")?;
-        blk.sync_all().context("sync boot failed")?;
+    pub(super) fn flash_partition(
+        partition: &str,
+        data: &[u8],
+        expected_sha256: &str,
+    ) -> Result<()> {
+        let directory = Path::new(KSU_BACKUP_DIR).join("image_transactions");
+        let receipt = crate::image_transaction::install(
+            "milk-root-image",
+            &[crate::image_transaction::ImageWrite {
+                target: PathBuf::from(partition),
+                image: data.to_vec(),
+                expected_sha256: Some(expected_sha256.to_owned()),
+            }],
+            &directory,
+        )?;
+        log::info!("Verified image transaction: {}", receipt.journal.display());
         Ok(())
     }
 
@@ -833,6 +831,9 @@ pub fn patch(args: BootPatchArgs) -> Result<()> {
             if (backup || (!is_kernelsu_patched && flash))
                 && let Err(e) = do_backup(&mut cpio, &boot_image_file)
             {
+                if flash || backup {
+                    return Err(e).context("stock image backup failed; no partition was written");
+                }
                 println!("- Backup stock image failed: {e:?}");
             }
         }
@@ -906,6 +907,8 @@ pub fn patch(args: BootPatchArgs) -> Result<()> {
 
         // Free the source mmap so the boot partition is no longer mapped read-only,
         // otherwise some kernels reject the subsequent write.
+        #[cfg(target_os = "android")]
+        let source_sha256 = sha256::digest(&*boot_image_data);
         drop(boot_image);
         drop(boot_image_data);
 
@@ -913,7 +916,7 @@ pub fn patch(args: BootPatchArgs) -> Result<()> {
         if flash {
             println!("- Flashing new boot image");
             let bootdevice = boot_image_file.display().to_string();
-            flash_partition(&bootdevice, &new_boot_bytes)?;
+            flash_partition(&bootdevice, &new_boot_bytes, &source_sha256)?;
             if ota {
                 post_ota()?;
             }
@@ -928,7 +931,7 @@ pub fn patch(args: BootPatchArgs) -> Result<()> {
             let output_dir = out.unwrap_or(std::env::current_dir()?);
             let name = out_name.unwrap_or_else(|| {
                 let now = chrono::Utc::now();
-                format!("kernelsu_patched_{}.img", now.format("%Y%m%d_%H%M%S"))
+                format!("milksu_patched_{}.img", now.format("%Y%m%d_%H%M%S"))
             });
             let output_image = output_dir.join(name);
             std::fs::write(&output_image, &new_boot_bytes).context("write out new boot failed")?;
@@ -1074,6 +1077,8 @@ pub fn restore(args: BootRestoreArgs) -> Result<()> {
         }
     };
 
+    #[cfg(target_os = "android")]
+    let source_sha256 = sha256::digest(&*bootimage_data);
     drop(boot_image);
     drop(bootimage_data);
 
@@ -1085,7 +1090,7 @@ pub fn restore(args: BootRestoreArgs) -> Result<()> {
             println!("- Flashing new boot image");
         }
         let bootdevice = boot_image_file.display().to_string();
-        flash_partition(&bootdevice, &new_boot_bytes)?;
+        flash_partition(&bootdevice, &new_boot_bytes, &source_sha256)?;
     }
 
     #[cfg(target_os = "android")]
@@ -1097,7 +1102,7 @@ pub fn restore(args: BootRestoreArgs) -> Result<()> {
         let output_dir = out.unwrap_or(std::env::current_dir()?);
         let name = out_name.unwrap_or_else(|| {
             let now = chrono::Utc::now();
-            format!("kernelsu_restore_{}.img", now.format("%Y%m%d_%H%M%S"))
+            format!("milksu_restore_{}.img", now.format("%Y%m%d_%H%M%S"))
         });
         let output_image = output_dir.join(name);
         std::fs::write(&output_image, &new_boot_bytes).context("copy out new boot failed")?;

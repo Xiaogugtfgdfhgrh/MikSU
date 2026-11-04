@@ -365,7 +365,7 @@ void __init ksu_throne_tracker_init()
     // nothing to do
 }
 
-void __exit ksu_throne_tracker_exit()
+void ksu_throne_tracker_exit(void)
 {
     // nothing to do
 }

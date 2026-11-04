@@ -374,12 +374,13 @@ int __nocfi ksu_lookup_kernel_symbols(const char *const *names, unsigned long *a
     return ret;
 }
 
-void __init ksu_init_symbol_resolver()
+int __init ksu_init_symbol_resolver(void)
 {
 #if !ALWAYS_HAVE_ON_EACH_SYMBOL
     kallsyms_on_each_symbol_fn = find_kernel_symbol_exact("kallsyms_on_each_symbol");
     if (!kallsyms_on_each_symbol_fn) {
         pr_warn("kallsyms_on_each_symbol not found!\n");
+        return -ENOENT;
     }
 #endif
 #if HAVE_ON_EACH_MATCH_SYMBOL
@@ -388,4 +389,5 @@ void __init ksu_init_symbol_resolver()
         pr_warn("kallsyms_on_each_match_symbol not found!\n");
     }
 #endif
+    return 0;
 }

@@ -1,75 +1,161 @@
 #!/bin/sh
 set -eu
 
-GKI_ROOT=$(pwd)
+die() {
+    printf '[ERROR] %s\n' "$*" >&2
+    exit 1
+}
 
 display_usage() {
-    echo "Usage: $0 [--cleanup | <commit-or-tag>]"
-    echo "  --cleanup:              Cleans up previous modifications made by the script."
-    echo "  <commit-or-tag>:        Sets up or updates the KernelSU to specified tag or commit."
-    echo "  -h, --help:             Displays this usage information."
-    echo "  (no args):              Sets up or updates the KernelSU environment to the latest tagged version."
+    cat <<'USAGE'
+Usage: sh /path/to/MilkSU/kernel/setup.sh [--cleanup]
+
+Run from the target ARM64 GKI source root. The default source is the local
+MilkSU checkout containing this script. Set MILKSU_SOURCE_ROOT to select a
+different local MilkSU checkout, including when invoking the script via stdin.
+
+This script never clones, pulls, stashes, checks out, or deletes a repository.
+Remote sources must be obtained separately and passed as MILKSU_SOURCE_ROOT.
+KernelSU, KernelSU-Next, KPatch-Next, and KPatch-Next-Module are read-only.
+
+--cleanup removes only this script's exact integration lines and matching
+drivers/milksu symlink. It keeps all source trees and other integrations.
+USAGE
 }
 
-initialize_variables() {
-    if test -d "$GKI_ROOT/common/drivers"; then
-         DRIVER_DIR="$GKI_ROOT/common/drivers"
-    elif test -d "$GKI_ROOT/drivers"; then
-         DRIVER_DIR="$GKI_ROOT/drivers"
-    else
-         echo '[ERROR] "drivers/" directory not found.'
-         exit 127
-    fi
-
-    DRIVER_MAKEFILE=$DRIVER_DIR/Makefile
-    DRIVER_KCONFIG=$DRIVER_DIR/Kconfig
+assert_not_reference() {
+    checked_path=$(printf '/%s/' "$1" | tr '[:upper:]' '[:lower:]')
+    case "$checked_path" in
+        */kernelsu/*|*/kernelsu-next/*|*/kpatch-next/*|*/kpatch-next-module/*)
+            die "Reference repository is read-only: $1"
+            ;;
+    esac
 }
 
-# Reverts modifications made by this script
-perform_cleanup() {
-    echo "[+] Cleaning up..."
-    [ -L "$DRIVER_DIR/kernelsu" ] && rm "$DRIVER_DIR/kernelsu" && echo "[-] Symlink removed."
-    grep -q "kernelsu" "$DRIVER_MAKEFILE" && sed -i '/kernelsu/d' "$DRIVER_MAKEFILE" && echo "[-] Makefile reverted."
-    grep -q "drivers/kernelsu/Kconfig" "$DRIVER_KCONFIG" && sed -i '/drivers\/kernelsu\/Kconfig/d' "$DRIVER_KCONFIG" && echo "[-] Kconfig reverted."
-    if [ -d "$GKI_ROOT/KernelSU" ]; then
-        rm -rf "$GKI_ROOT/KernelSU" && echo "[-] KernelSU directory deleted."
-    fi
+assert_target_path() {
+    assert_not_reference "$1"
+    case "$1" in
+        "$GKI_ROOT"/*) ;;
+        *) die "Integration path escapes the target GKI tree: $1" ;;
+    esac
 }
 
-# Sets up or update KernelSU environment
-setup_kernelsu() {
-    echo "[+] Setting up KernelSU..."
-    test -d "$GKI_ROOT/KernelSU" || git clone https://github.com/tiann/KernelSU && echo "[+] Repository cloned."
-    cd "$GKI_ROOT/KernelSU"
-    git stash && echo "[-] Stashed current changes."
-    if [ "$(git status | grep -Po 'v\d+(\.\d+)*' | head -n1)" ]; then
-        git checkout main && echo "[-] Switched to main branch."
-    fi
-    git pull && echo "[+] Repository updated."
-    if [ -z "${1-}" ]; then
-        git checkout "$(git describe --abbrev=0 --tags)" && echo "[-] Checked out latest tag."
-    else
-        git checkout "$1" && echo "[-] Checked out $1." || echo "[-] Checkout default branch"
-    fi
-    cd "$DRIVER_DIR"
-    ln -sf "$(realpath --relative-to="$DRIVER_DIR" "$GKI_ROOT/KernelSU/kernel")" "kernelsu" && echo "[+] Symlink created."
+mode=setup
+case "${1-}" in
+    -h|--help)
+        display_usage
+        exit 0
+        ;;
+    --cleanup)
+        mode=cleanup
+        ;;
+    '')
+        ;;
+    *)
+        die "Unsupported argument '$1'; select a local checkout with MILKSU_SOURCE_ROOT."
+        ;;
+esac
+[ "$#" -le 1 ] || die "Only --cleanup or --help is accepted."
+command -v realpath >/dev/null 2>&1 || die "realpath is required."
 
-    # Add entries in Makefile and Kconfig if not already existing
-    grep -q "kernelsu" "$DRIVER_MAKEFILE" || printf "\nobj-\$(CONFIG_KSU) += kernelsu/\n" >> "$DRIVER_MAKEFILE" && echo "[+] Modified Makefile."
-    grep -q "source \"drivers/kernelsu/Kconfig\"" "$DRIVER_KCONFIG" || sed -i "/endmenu/i\source \"drivers/kernelsu/Kconfig\"" "$DRIVER_KCONFIG" && echo "[+] Modified Kconfig."
-    echo '[+] Done.'
-}
+GKI_ROOT=$(realpath -e -- "$(pwd -P)") || die "Cannot resolve the target GKI tree."
+assert_not_reference "$GKI_ROOT"
 
-# Process command-line arguments
-if [ "$#" -eq 0 ]; then
-    initialize_variables
-    setup_kernelsu
-elif [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
-    display_usage
-elif [ "$1" = "--cleanup" ]; then
-    initialize_variables
-    perform_cleanup
+if [ -n "${MILKSU_SOURCE_ROOT-}" ]; then
+    SOURCE_ROOT=$(realpath -e -- "$MILKSU_SOURCE_ROOT") ||
+        die "MILKSU_SOURCE_ROOT does not exist."
+elif [ -f "$0" ]; then
+    script_path=$(realpath -e -- "$0") || die "Cannot resolve this script."
+    SOURCE_ROOT=$(realpath -e -- "$(dirname -- "$script_path")/..")
 else
-    initialize_variables
-    setup_kernelsu "$@"
+    die "Set MILKSU_SOURCE_ROOT to an existing local MilkSU checkout."
 fi
+assert_not_reference "$SOURCE_ROOT"
+[ -f "$SOURCE_ROOT/kernel/core/root_ref.c" ] &&
+    [ -f "$SOURCE_ROOT/uapi/supercall.h" ] &&
+    [ -f "$SOURCE_ROOT/kernel/MILKSU_HOOK_PROVENANCE.json" ] ||
+    die "MILKSU_SOURCE_ROOT is not a MilkSU source tree."
+grep -Eq '"product"[[:space:]]*:[[:space:]]*"MilkSU"' \
+    "$SOURCE_ROOT/kernel/MILKSU_HOOK_PROVENANCE.json" ||
+    die "The selected source does not identify itself as MilkSU."
+SOURCE_KERNEL=$(realpath -e -- "$SOURCE_ROOT/kernel")
+assert_not_reference "$SOURCE_KERNEL"
+
+if [ -d "$GKI_ROOT/common/drivers" ]; then
+    DRIVER_DIR=$(realpath -e -- "$GKI_ROOT/common/drivers")
+elif [ -d "$GKI_ROOT/drivers" ]; then
+    DRIVER_DIR=$(realpath -e -- "$GKI_ROOT/drivers")
+else
+    die "No common/drivers or drivers directory in the target GKI tree."
+fi
+assert_target_path "$DRIVER_DIR"
+DRIVER_MAKEFILE=$(realpath -e -- "$DRIVER_DIR/Makefile") ||
+    die "Target drivers/Makefile is missing."
+DRIVER_KCONFIG=$(realpath -e -- "$DRIVER_DIR/Kconfig") ||
+    die "Target drivers/Kconfig is missing."
+assert_target_path "$DRIVER_MAKEFILE"
+assert_target_path "$DRIVER_KCONFIG"
+DRIVER_LINK="$DRIVER_DIR/milksu"
+MAKE_LINE='obj-$(CONFIG_KSU) += milksu/ # MilkSU setup'
+KCONFIG_LINE='source "drivers/milksu/Kconfig" # MilkSU setup'
+
+# Never take over a different checkout or remove an unowned directory/link.
+if [ -L "$DRIVER_LINK" ]; then
+    link_target=$(realpath -e -- "$DRIVER_LINK") ||
+        die "drivers/milksu is a dangling symlink; inspect it manually."
+    [ "$link_target" = "$SOURCE_KERNEL" ] ||
+        die "drivers/milksu belongs to a different source tree."
+elif [ -e "$DRIVER_LINK" ]; then
+    die "drivers/milksu already exists and is not a managed symlink."
+fi
+
+make_tmp=
+kconfig_tmp=
+cleanup_temps() {
+    [ -z "$make_tmp" ] || rm -f -- "$make_tmp"
+    [ -z "$kconfig_tmp" ] || rm -f -- "$kconfig_tmp"
+}
+trap cleanup_temps EXIT
+trap 'exit 1' HUP INT TERM
+
+make_tmp=$(mktemp "$DRIVER_MAKEFILE.milksu.XXXXXX")
+kconfig_tmp=$(mktemp "$DRIVER_KCONFIG.milksu.XXXXXX")
+
+if [ "$mode" = cleanup ]; then
+    awk -v line="$MAKE_LINE" '$0 != line' "$DRIVER_MAKEFILE" >"$make_tmp"
+    awk -v line="$KCONFIG_LINE" '$0 != line' "$DRIVER_KCONFIG" >"$kconfig_tmp"
+else
+    # Another root integration must be removed deliberately by its owner.
+    [ ! -e "$DRIVER_DIR/kernelsu" ] && [ ! -L "$DRIVER_DIR/kernelsu" ] ||
+        die "Existing drivers/kernelsu integration must be handled separately."
+    if grep -Fv "$MAKE_LINE" "$DRIVER_MAKEFILE" |
+        grep -Eq '^[[:space:]]*obj-.*CONFIG_KSU[)]'; then
+        die "drivers/Makefile already contains another CONFIG_KSU integration."
+    fi
+    if grep -Fv "$KCONFIG_LINE" "$DRIVER_KCONFIG" |
+        grep -Eq '^[[:space:]]*source[[:space:]]+"drivers/(milksu|kernelsu|KernelSU|KernelSU-Next)/Kconfig"'; then
+        die "drivers/Kconfig already contains another root integration."
+    fi
+    awk '{ print }' "$DRIVER_MAKEFILE" >"$make_tmp"
+    awk '{ print }' "$DRIVER_KCONFIG" >"$kconfig_tmp"
+    if ! grep -Fqx "$MAKE_LINE" "$DRIVER_MAKEFILE"; then
+        printf '\n%s\n' "$MAKE_LINE" >>"$make_tmp"
+    fi
+    if ! grep -Fqx "$KCONFIG_LINE" "$DRIVER_KCONFIG"; then
+        printf '\n%s\n' "$KCONFIG_LINE" >>"$kconfig_tmp"
+    fi
+fi
+
+chmod --reference="$DRIVER_MAKEFILE" "$make_tmp"
+chmod --reference="$DRIVER_KCONFIG" "$kconfig_tmp"
+if [ "$mode" = setup ] && [ ! -L "$DRIVER_LINK" ]; then
+    ln -s -- "$SOURCE_KERNEL" "$DRIVER_LINK"
+fi
+mv -- "$make_tmp" "$DRIVER_MAKEFILE"
+make_tmp=
+mv -- "$kconfig_tmp" "$DRIVER_KCONFIG"
+kconfig_tmp=
+if [ "$mode" = cleanup ] && [ -L "$DRIVER_LINK" ]; then
+    rm -- "$DRIVER_LINK"
+fi
+printf '[+] MilkSU %s complete: %s (source: %s)\n' "$mode" "$GKI_ROOT" "$SOURCE_ROOT"

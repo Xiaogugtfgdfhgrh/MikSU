@@ -49,7 +49,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import me.weishu.kernelsu.R
+import me.weishu.kernelsu.BuildConfig
 import me.weishu.kernelsu.ui.UiMode
+import me.weishu.kernelsu.ui.screen.kpm.KpmUiState
 import me.weishu.kernelsu.ui.component.KsuIsValid
 import me.weishu.kernelsu.ui.component.material.ExpressiveScaffold
 import me.weishu.kernelsu.ui.component.material.SegmentedColumn
@@ -70,6 +72,7 @@ fun SettingPagerMaterial(
     uiState: SettingsUiState,
     actions: SettingsScreenActions,
     bottomInnerPadding: Dp,
+    systemState: KpmUiState = KpmUiState(),
 ) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
     val snackBarHost = remember { SnackbarHostState() }
@@ -104,6 +107,7 @@ fun SettingPagerMaterial(
                                 title = stringResource(id = R.string.settings_check_update),
                                 summary = stringResource(id = R.string.settings_check_update_summary),
                                 checked = uiState.checkUpdate,
+                                enabled = BuildConfig.CORE_UPDATE_ENABLED,
                                 onCheckedChange = actions.onSetCheckUpdate
                             )
                         },
@@ -180,7 +184,7 @@ fun SettingPagerMaterial(
 
                 SegmentedColumn(
                     modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 13.dp),
-                    content = listOf(
+                    content = listOf<@Composable () -> Unit>(
                         {
                             val suSummary = when (uiState.suCompatStatus) {
                                 "unsupported" -> stringResource(id = R.string.feature_status_unsupported_summary)
@@ -214,6 +218,7 @@ fun SettingPagerMaterial(
                                 onCheckedChange = actions.onSetKernelUmountEnabled
                             )
                         },
+                    ) + systemIntegrationPreferencesMaterial(systemState, actions) + listOf<@Composable () -> Unit>(
                         {
                             val selinuxHideSummary = when (uiState.selinuxHideStatus) {
                                 "unsupported" -> stringResource(id = R.string.feature_status_unsupported_summary)
@@ -228,6 +233,22 @@ fun SettingPagerMaterial(
                                 enabled = uiState.selinuxHideStatus == "supported",
                                 checked = uiState.isSelinuxHideEnabled,
                                 onCheckedChange = actions.onSetSelinuxHideEnabled
+                            )
+                        },
+                        {
+                            val avcSummary = when (uiState.avcSpoofStatus) {
+                                "unsupported" -> stringResource(R.string.feature_status_unsupported_summary)
+                                "managed" -> stringResource(R.string.feature_status_managed_summary)
+                                "forced" -> stringResource(R.string.feature_status_forced_summary)
+                                else -> stringResource(R.string.settings_enable_avc_spoof_summary)
+                            }
+                            SegmentedSwitchItem(
+                                icon = Icons.Filled.Security,
+                                title = stringResource(R.string.settings_enable_avc_spoof),
+                                summary = avcSummary,
+                                enabled = uiState.avcSpoofStatus == "supported" && !uiState.avcSpoofBusy,
+                                checked = uiState.isAvcSpoofEnabled,
+                                onCheckedChange = actions.onSetAvcSpoofEnabled
                             )
                         },
                         {

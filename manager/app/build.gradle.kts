@@ -1,6 +1,8 @@
 @file:Suppress("UnstableApiUsage")
 
 import com.google.protobuf.gradle.id
+import com.android.build.api.variant.HostTestBuilder
+import java.net.URI
 
 plugins {
     alias(libs.plugins.agp.app)
@@ -23,10 +25,18 @@ val managerVersionCode = rootProject.extra["managerVersionCode"] as Int
 val managerVersionName = rootProject.extra["managerVersionName"] as String
 
 val isPrBuild = project.findProperty("IS_PR_BUILD")?.toString()?.toBoolean() ?: false
-val defaultManagerPackageName = if (isPrBuild) "me.weishu.kernelsu.pr" else "me.weishu.kernelsu"
-val defaultManagerName = if (isPrBuild) "KernelSU PR" else "KernelSU"
+val defaultManagerPackageName = if (isPrBuild) "io.milksu.manager.pr" else "io.milksu.manager"
+val defaultManagerName = if (isPrBuild) "MilkSU PR" else "MilkSU"
 val managerPackageName = project.findProperty("KSU_PACKAGE_NAME")?.toString() ?: defaultManagerPackageName
 val managerName = project.findProperty("KSU_NAME")?.toString() ?: defaultManagerName
+val milkSuUpdateUrl = providers.gradleProperty("MILKSU_UPDATE_URL")
+    .orElse(providers.environmentVariable("MILKSU_UPDATE_URL"))
+    .orElse("https://api.github.com/repos/Xiaogugtfgdfhgrh/MikSU/releases/latest").get().trim()
+val coreUpdateEnabled = !isPrBuild && milkSuUpdateUrl.isNotEmpty()
+require(!coreUpdateEnabled || runCatching {
+    val uri = URI(milkSuUpdateUrl)
+    uri.scheme == "https" && !uri.host.isNullOrBlank() && uri.rawUserInfo == null
+}.getOrDefault(false)) { "MILKSU_UPDATE_URL must be an HTTPS URL" }
 
 apksign {
     storeFileProperty = "KEYSTORE_FILE"
@@ -130,7 +140,7 @@ android {
     }
 
     androidResources {
-        generateLocaleConfig = true
+        generateLocaleConfig = false
     }
     compileSdk {
         version =
@@ -149,6 +159,8 @@ android {
         applicationId = managerPackageName
 
         buildConfigField("boolean", "IS_PR_BUILD", isPrBuild.toString())
+        buildConfigField("boolean", "CORE_UPDATE_ENABLED", coreUpdateEnabled.toString())
+        buildConfigField("String", "MILKSU_UPDATE_URL", "\"${milkSuUpdateUrl.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
         resValue("string", "app_name", managerName)
 
         externalNativeBuild {
@@ -160,11 +172,12 @@ android {
         }
 
         ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64", "riscv64")
+            abiFilters += listOf("arm64-v8a")
         }
     }
 
     lint {
+        lintConfig = file("lint.xml")
         abortOnError = true
         checkReleaseBuilds = false
     }
@@ -176,6 +189,11 @@ android {
 }
 
 androidComponents {
+    beforeVariants(selector().all()) { variant ->
+        requireNotNull(variant.hostTests[HostTestBuilder.UNIT_TEST_TYPE]) {
+            "Missing default JVM test component for ${variant.name}"
+        }.enable = true
+    }
     onVariants(selector().withBuildType("release")) {
         it.packaging.resources.excludes.addAll(listOf("META-INF/**", "kotlin/**", "**.bin"))
     }

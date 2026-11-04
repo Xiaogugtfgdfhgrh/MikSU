@@ -14,6 +14,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
+import me.weishu.kernelsu.data.model.MainTab
 import me.weishu.kernelsu.ui.LocalUiMode
 import me.weishu.kernelsu.ui.UiMode
 import me.weishu.kernelsu.ui.util.shouldShowSplitPane
@@ -23,6 +24,7 @@ import top.yukonga.miuix.kmp.utils.springAnimateToPage
 
 class MainPagerState(
     val pagerState: PagerState,
+    val tabs: List<MainTab>,
     private val coroutineScope: CoroutineScope,
     private val animatePageChanges: Boolean,
 ) {
@@ -71,11 +73,12 @@ class MainPagerState(
 @Composable
 fun rememberMainPagerState(
     pagerState: PagerState,
+    tabs: List<MainTab> = MainTab.visible(false),
     coroutineScope: CoroutineScope = rememberCoroutineScope(),
     animatePageChanges: Boolean = true,
 ): MainPagerState {
-    return remember(pagerState, coroutineScope, animatePageChanges) {
-        MainPagerState(pagerState, coroutineScope, animatePageChanges)
+    return remember(pagerState, tabs, coroutineScope, animatePageChanges) {
+        MainPagerState(pagerState, tabs, coroutineScope, animatePageChanges)
     }
 }
 
@@ -91,11 +94,11 @@ internal enum class BadgeTone { Alert, Accent }
 @Immutable
 internal data class NavBadge(val count: Int, val tone: BadgeTone)
 
-internal fun badgeFor(index: Int, state: NavigationBadgeState): NavBadge? = when (index) {
-    BottomBarDestination.SuperUser.ordinal ->
+internal fun badgeFor(tab: MainTab, state: NavigationBadgeState): NavBadge? = when (tab) {
+    MainTab.SUPERUSER ->
         state.superuserCount.takeIf { it > 0 }?.let { NavBadge(it, BadgeTone.Accent) }
 
-    BottomBarDestination.Module.ordinal -> when {
+    MainTab.MODULE -> when {
         state.moduleUpdatableCount > 0 -> NavBadge(state.moduleUpdatableCount, BadgeTone.Alert)
         state.moduleEnabledCount > 0 -> NavBadge(state.moduleEnabledCount, BadgeTone.Accent)
         else -> null

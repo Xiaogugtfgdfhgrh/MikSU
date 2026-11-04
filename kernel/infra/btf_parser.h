@@ -11,5 +11,6 @@ struct ksu_btf_field {
 };
 
 int ksu_btf_field(const char *structure, const char *member, u32 kind, u32 size, struct ksu_btf_field *field);
+int ksu_btf_avc_sid_regs(unsigned int *source, unsigned int *target);
 #endif
 #endif

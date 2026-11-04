@@ -32,10 +32,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.saveable.SaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -46,6 +49,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigationevent.NavigationEventInfo
 import androidx.navigationevent.compose.NavigationBackHandler
@@ -57,6 +61,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import me.weishu.kernelsu.Natives
+import me.weishu.kernelsu.ksuApp
+import me.weishu.kernelsu.data.model.MainTab
+import me.weishu.kernelsu.ui.screen.kpm.KpmPager
+import me.weishu.kernelsu.ui.screen.kpm.RootUnavailableContent
 import me.weishu.kernelsu.ui.component.bottombar.BottomBar
 import me.weishu.kernelsu.ui.component.bottombar.MainPagerState
 import me.weishu.kernelsu.ui.component.bottombar.NavigationBadgeState
@@ -96,7 +104,7 @@ import me.weishu.kernelsu.ui.util.install
 import me.weishu.kernelsu.ui.util.rememberBlurBackdrop
 import me.weishu.kernelsu.ui.util.rememberContentReady
 import me.weishu.kernelsu.ui.viewmodel.MainActivityViewModel
-import me.weishu.kernelsu.ui.viewmodel.MainPagerConfig
+import me.weishu.kernelsu.ui.viewmodel.KpmViewModel
 import me.weishu.kernelsu.ui.viewmodel.ModuleViewModel
 import me.weishu.kernelsu.ui.viewmodel.SuperUserViewModel
 import top.yukonga.miuix.kmp.basic.Scaffold
@@ -197,6 +205,7 @@ class MainActivity : ComponentActivity() {
                             initialPage = selectedMainPage,
                             pagerInterceptionMode = uiState.pagerInterceptionMode,
                             onPageChanged = viewModel::setSelectedMainPage,
+                            onContentReady = { contentReady = true },
                         )
                     }
 
@@ -256,6 +265,13 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
+                    val currentRoute = navigator.current()
+                    SideEffect {
+                        when (currentRoute) {
+                            Route.Main, Route.Home, Route.SuperUser, Route.Module, Route.Settings -> Unit
+                            else -> contentReady = true
+                        }
+                    }
                     when (uiMode) {
                         UiMode.Material -> androidx.compose.material3.Scaffold(
                             containerColor = MaterialTheme.colorScheme.surfaceContainer
@@ -263,7 +279,6 @@ class MainActivity : ComponentActivity() {
 
                         UiMode.Miuix -> Scaffold { navDisplay() }
                     }
-                    SideEffect { contentReady = true }
                 }
             }
         }
@@ -284,23 +299,66 @@ fun MainScreen(
     initialPage: Int = 0,
     pagerInterceptionMode: Int = PagerInterceptionMode.CrossAxisInterceptor.ordinal,
     onPageChanged: (Int) -> Unit = {},
+    onContentReady: () -> Unit = {},
+) {
+    val integrationViewModel = viewModel<KpmViewModel>(viewModelStoreOwner = ksuApp)
+    val integrationState by integrationViewModel.uiState.collectAsStateWithLifecycle()
+    val homeStartupState by integrationViewModel.homeStartupState.collectAsStateWithLifecycle()
+    val tabs = MainTab.visible(integrationState.kpmTabEnabled)
+    var selectedTab by rememberSaveable {
+        mutableStateOf(MainTab.entries.getOrElse(initialPage) { MainTab.HOME }.name)
+    }
+    val destination = MainTab.destination(selectedTab, tabs)
+    val tabStates = rememberSaveableStateHolder()
+    LifecycleResumeEffect(Unit) {
+        integrationViewModel.refresh(includeSusfs = true)
+        onPauseOrDispose { }
+    }
+    if (!homeStartupState.awaitingContent(integrationState, selectedTab)) {
+        SideEffect { onContentReady() }
+        key(tabs) {
+            MainScreenContent(
+                initialPage = tabs.indexOf(destination),
+                tabs = tabs,
+                tabStates = tabStates,
+                pagerInterceptionMode = pagerInterceptionMode,
+                onPageChanged = { page ->
+                    tabs.getOrNull(page)?.let {
+                        selectedTab = it.name
+                        onPageChanged(it.ordinal)
+                    }
+                },
+            )
+        }
+    }
+}
+
+@SuppressLint("UnusedMaterial3ScaffoldPaddingParameter")
+@Composable
+private fun MainScreenContent(
+    initialPage: Int,
+    tabs: List<MainTab>,
+    tabStates: SaveableStateHolder,
+    pagerInterceptionMode: Int,
+    onPageChanged: (Int) -> Unit,
 ) {
     val navController = LocalNavigator.current
     val enableBlur = LocalEnableBlur.current
     val enableFloatingBottomBar = LocalEnableFloatingBottomBar.current
     val enableFloatingBottomBarBlur = LocalEnableFloatingBottomBarBlur.current
     val useNavigationRail = useNavigationRail(enableFloatingBottomBar)
-    val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { MainPagerConfig.PAGE_COUNT })
+    val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { tabs.size })
     val mainPagerState = rememberMainPagerState(
         pagerState = pagerState,
+        tabs = tabs,
         animatePageChanges = !useNavigationRail,
     )
-    val isFullFeatured = Natives.isFullFeatured()
+    val isFullFeatured = runCatching { Natives.isFullFeatured() }.getOrDefault(false)
     val pagerMode = PagerInterceptionMode.entries.getOrElse(pagerInterceptionMode) {
         PagerInterceptionMode.Native
     }
     val interceptPagerGestures = pagerMode == PagerInterceptionMode.CrossAxisInterceptor
-    var userScrollEnabled by remember(isFullFeatured) { mutableStateOf(isFullFeatured) }
+    var userScrollEnabled by remember { mutableStateOf(true) }
 
     val enableNavigationBadge = LocalEnableNavigationBadge.current
     val badgeEnabled = enableNavigationBadge && isFullFeatured
@@ -395,7 +453,8 @@ fun MainScreen(
                         )
                         .then(if (enableFloatingBottomBar && enableFloatingBottomBarBlur) Modifier.layerBackdrop(backdrop) else Modifier),
                     state = mainPagerState.pagerState,
-                    beyondViewportPageCount = if (contentReady) 3 else 0,
+                    key = { tabs[it].name },
+                    beyondViewportPageCount = if (contentReady) 1 else 0,
                     overscrollEffect = null,
                     userScrollEnabled = userScrollEnabled && !interceptPagerGestures,
                     pageNestedScrollConnection = if (interceptPagerGestures) {
@@ -412,11 +471,18 @@ fun MainScreen(
                     ),
                 ) { page ->
                     val isCurrentPage = page == settledPage
-                    when (page) {
-                        0 -> if (contentReady || isCurrentPage) HomePager(navController, bottomInnerPadding, isCurrentPage)
-                        1 -> if (contentReady || isCurrentPage) SuperUserPager(navController, bottomInnerPadding, isCurrentPage)
-                        2 -> if (contentReady || isCurrentPage) ModulePager(bottomInnerPadding, isCurrentPage)
-                        3 -> if (contentReady || isCurrentPage) SettingPager(navController, bottomInnerPadding, isCurrentPage)
+                    tabStates.SaveableStateProvider(tabs[page].name) {
+                        when (tabs[page]) {
+                            MainTab.HOME -> if (contentReady || isCurrentPage) HomePager(navController, bottomInnerPadding, isCurrentPage)
+                            MainTab.KPM -> if (contentReady || isCurrentPage) KpmPager(bottomInnerPadding, isCurrentPage)
+                            MainTab.SUPERUSER -> if (contentReady || isCurrentPage) {
+                                if (isFullFeatured) SuperUserPager(navController, bottomInnerPadding, isCurrentPage) else RootUnavailableContent()
+                            }
+                            MainTab.MODULE -> if (contentReady || isCurrentPage) {
+                                if (isFullFeatured) ModulePager(bottomInnerPadding, isCurrentPage) else RootUnavailableContent()
+                            }
+                            MainTab.SETTINGS -> if (contentReady || isCurrentPage) SettingPager(navController, bottomInnerPadding, isCurrentPage)
+                        }
                     }
                 }
             }

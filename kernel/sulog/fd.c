@@ -86,7 +86,7 @@ void __init ksu_sulog_fd_init(void)
     mutex_unlock(&ksu_sulog_fd_lock);
 }
 
-void __exit ksu_sulog_fd_exit(void)
+void ksu_sulog_fd_exit(void)
 {
     mutex_lock(&ksu_sulog_fd_lock);
     ksu_sulog_fd_active = false;

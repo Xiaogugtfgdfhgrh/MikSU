@@ -1,6 +1,5 @@
 #include <linux/export.h>
 #include <linux/fs.h>
-#include <linux/kobject.h>
 #include <linux/module.h>
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
@@ -23,12 +22,19 @@
 #include "infra/file_wrapper.h"
 #include "selinux/selinux.h"
 #include "hook/syscall_hook.h"
+#include "hook/tp_marker.h"
 #include "feature/adb_root.h"
 #include "feature/selinux_hide.h"
+#include "feature/avc_spoof.h"
 #include "feature/module_blacklist.h"
 #include "feature/shell_su_adb_only.h"
 #include "infra/symbol_resolver.h"
 #include "preinit/preinit.h"
+#include "milksu_root.h"
+
+#ifndef CONFIG_ARM64
+#error "MilkSU's first release requires ARM64 GKI"
+#endif
 
 #if defined(__x86_64__) && !defined(CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER)
 #include <asm/cpufeature.h>
@@ -91,11 +97,83 @@ bool ksu_bundled = false;
 module_param_named(bundled, ksu_bundled, bool, 0);
 #endif
 
+static bool feature_initialized, allowlist_initialized, sulog_initialized;
+static bool adb_initialized, shell_initialized, manager_initialized;
+static bool backend_initialized, supercalls_initialized, runtime_initialized;
+static bool preinit_initialized, throne_initialized, observer_initialized;
+static bool hide_initialized, avc_initialized;
+static int milksu_init_error;
+module_param_named(init_error, milksu_init_error, int, 0444);
+MODULE_PARM_DESC(init_error, "Initialization errno; nonzero means a quarantined, unready root provider");
+
+static int milksu_detach_hooks(void)
+{
+    int ret;
+
+    milksu_root_set_ready(false);
+    if (avc_initialized) {
+        ksu_avc_spoof_exit();
+        avc_initialized = false;
+    }
+    if (hide_initialized) {
+        ret = ksu_selinux_hide_exit();
+        if (ret)
+            return ret;
+        hide_initialized = false;
+    }
+    if (runtime_initialized) {
+        ret = ksu_ksud_exit();
+        if (ret)
+            return ret;
+        runtime_initialized = false;
+    }
+    if (preinit_initialized) {
+        ksu_preinit_exit();
+        preinit_initialized = false;
+    }
+    if (manager_initialized) {
+        ksu_syscall_hook_manager_exit();
+        manager_initialized = false;
+    }
+    if (supercalls_initialized) {
+        ksu_supercalls_exit();
+        supercalls_initialized = false;
+    }
+    if (backend_initialized) {
+        ret = ksu_syscall_hook_exit();
+        if (ret)
+            return ret;
+        backend_initialized = false;
+    }
+    return ksu_lsm_hook_exit();
+}
+
+static void milksu_release_state(void)
+{
+    if (observer_initialized)
+        ksu_observer_exit();
+    if (throne_initialized)
+        ksu_throne_tracker_exit();
+    if (shell_initialized)
+        ksu_shell_su_adb_only_exit();
+    if (adb_initialized)
+        ksu_adb_root_exit();
+    if (sulog_initialized)
+        ksu_sulog_exit();
+    if (allowlist_initialized)
+        ksu_allowlist_exit();
+    if (feature_initialized)
+        ksu_feature_exit();
+    ksu_module_blacklist_exit();
+    put_cred(ksu_cred);
+    ksu_cred = NULL;
+}
+
 int __init kernelsu_init(void)
 {
     int ret;
 
-    pr_info("welcome to KernelSU version " __stringify(KERNEL_SU_VERSION) ", package name " KSU_PACKAGE_NAME "\n");
+    pr_info("welcome to MilkSU version " __stringify(KERNEL_SU_VERSION) ", package name " KSU_PACKAGE_NAME "\n");
 #if defined(__x86_64__) && !defined(CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER)
     // If the kernel has the hardening patch, X86_FEATURE_INDIRECT_SAFE must be set
     if (!boot_cpu_has(X86_FEATURE_INDIRECT_SAFE)) {
@@ -122,7 +200,7 @@ int __init kernelsu_init(void)
     pr_alert("*************************************************************");
     pr_alert("**     NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE    **");
     pr_alert("**                                                         **");
-    pr_alert("**         You are running KernelSU in DEBUG mode          **");
+        pr_alert("**          You are running MilkSU in DEBUG mode           **");
     pr_alert("**                                                         **");
     pr_alert("**     NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE    **");
     pr_alert("*************************************************************");
@@ -138,7 +216,12 @@ int __init kernelsu_init(void)
     }
 
     pr_info("initializing symbol resolver\n");
-    ksu_init_symbol_resolver();
+    ret = ksu_init_symbol_resolver();
+    if (ret) {
+        put_cred(ksu_cred);
+        ksu_cred = NULL;
+        return ret;
+    }
 
     ret = ksu_selinux_inode_init();
     if (ret) {
@@ -147,20 +230,32 @@ int __init kernelsu_init(void)
         return ret;
     }
 
-    ksu_syscall_hook_init();
-
     // Block modules early, before vendor modules are loaded in second stage.
-    ksu_module_blacklist_init();
+    ret = ksu_module_blacklist_init();
+    if (ret)
+        goto fail;
 
     ksu_feature_init();
-    ksu_sulog_init();
-    ksu_adb_root_init();
+    feature_initialized = true;
+    ksu_allowlist_init();
+    allowlist_initialized = true;
+    ret = ksu_sulog_init();
+    if (ret)
+        goto fail;
+    sulog_initialized = true;
+    ret = ksu_adb_root_init();
+    if (ret)
+        goto fail;
+    adb_initialized = true;
     ksu_lsm_hook_init();
-    ksu_selinux_hide_init();
-    ksu_shell_su_adb_only_init();
+    ret = ksu_shell_su_adb_only_init();
+    if (ret)
+        goto fail;
+    shell_initialized = true;
 
-    ksu_supercalls_init();
     ksu_app_profile_init();
+    ksu_throne_tracker_init();
+    throne_initialized = true;
 
     if (ksu_late_loaded) {
         pr_info("late load mode, skipping kprobe hooks\n");
@@ -174,38 +269,69 @@ int __init kernelsu_init(void)
         // can continue to access /data/app etc. after enforcement.
         escape_to_root_for_init();
 
-        ksu_allowlist_init();
         ksu_load_allow_list();
 
-        ksu_syscall_hook_manager_init();
-
-        ksu_throne_tracker_init();
-        ksu_observer_init();
-        ksu_file_wrapper_init();
-
         ksu_boot_completed = true;
-        track_throne(false);
-
-        ksu_feature_apply_forced();
 
         if (!getenforce()) {
             pr_info("Permissive SELinux, enforcing\n");
             setenforce(true);
         }
 
-    } else {
-        ksu_syscall_hook_manager_init();
-
-        ksu_allowlist_init();
-
-        ksu_throne_tracker_init();
-
-        ksu_ksud_init();
-
-        ksu_preinit_init();
-
-        ksu_file_wrapper_init();
     }
+
+    backend_initialized = true;
+    ret = ksu_syscall_hook_init();
+    if (ret)
+        goto fail;
+    supercalls_initialized = true;
+    ret = ksu_supercalls_init();
+    if (ret)
+        goto fail;
+    ret = ksu_syscall_hook_manager_init();
+    if (ret)
+        goto fail;
+    manager_initialized = true;
+
+    if (!ksu_late_loaded) {
+        ret = ksu_preinit_init();
+        if (ret)
+            goto fail;
+        preinit_initialized = true;
+        runtime_initialized = true;
+        ret = ksu_ksud_init();
+        if (ret)
+            goto fail;
+    }
+
+    hide_initialized = true;
+    ret = ksu_selinux_hide_init();
+    if (ret)
+        goto fail;
+    ret = ksu_avc_spoof_init();
+    if (ret)
+        goto fail;
+    avc_initialized = true;
+    ret = ksu_file_wrapper_init();
+    if (ret)
+        goto fail;
+    if (ksu_late_loaded) {
+        ret = ksu_observer_init();
+        if (ret)
+            goto fail;
+        observer_initialized = true;
+        track_throne(false);
+    }
+    if (ksu_late_loaded) {
+        ksu_feature_apply_forced();
+        ksu_avc_spoof_late_init();
+    }
+
+    /* Raw table/LSM callbacks cannot veto delete_module from module_exit. */
+    milksu_root_pin_callbacks();
+    milksu_root_set_ready(true);
+    ksu_allowlist_ready();
+    ksu_mark_running_process();
 
 #ifdef MODULE
 #ifndef CONFIG_KSU_DEBUG
@@ -213,39 +339,36 @@ int __init kernelsu_init(void)
 #endif
 #endif
     return 0;
+
+fail:
+    milksu_init_error = ret;
+    pr_err("MilkSU initialization failed: %d\n", ret);
+    {
+        int cleanup_ret = milksu_detach_hooks();
+
+        if (cleanup_ret || milksu_root_callbacks_pinned()) {
+            /*
+             * Returning an init error would free this module's text even with
+             * references. Keep an inert, unready provider resident instead.
+             */
+            milksu_root_pin_callbacks();
+            pr_crit("MilkSU quarantined: init=%d, restore=%d; state retained\n",
+                    ret, cleanup_ret);
+            return 0;
+        }
+    }
+    milksu_release_state();
+    return ret;
 }
 
 void __exit kernelsu_exit(void)
 {
-    // Phase 1: Stop all hooks first to prevent new callbacks
-    ksu_syscall_hook_manager_exit();
-
-    ksu_supercalls_exit();
-
-    if (!ksu_late_loaded) {
-        ksu_ksud_exit();
-        ksu_preinit_exit();
+    if (milksu_detach_hooks()) {
+        pr_crit("MilkSU callbacks still referenced; state retained\n");
+        return;
     }
-
-    // Wait for any in-flight RCU readers (e.g. handler traversing allow_list)
     synchronize_rcu();
-
-    // Phase 2: Now safe to release data structures
-    ksu_observer_exit();
-
-    ksu_throne_tracker_exit();
-
-    ksu_allowlist_exit();
-
-    ksu_shell_su_adb_only_exit();
-    ksu_selinux_hide_exit();
-    ksu_lsm_hook_exit();
-    ksu_adb_root_exit();
-    ksu_sulog_exit();
-    ksu_feature_exit();
-    ksu_module_blacklist_exit();
-
-    put_cred(ksu_cred);
+    milksu_release_state();
 }
 
 #if NEED_OWN_STACKPROTECTOR
@@ -257,7 +380,7 @@ module_exit(kernelsu_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("weishu");
-MODULE_DESCRIPTION("Android KernelSU");
+MODULE_DESCRIPTION("MilkSU ARM64 GKI root with KernelSU-Next hooks");
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
 MODULE_IMPORT_NS("VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver");
 #else

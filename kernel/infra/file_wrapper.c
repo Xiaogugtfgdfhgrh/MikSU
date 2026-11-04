@@ -582,19 +582,22 @@ done:
     return ret;
 }
 
-void __init ksu_file_wrapper_init(void)
+int __init ksu_file_wrapper_init(void)
 {
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 16, 0)
     static const struct file_operations tmp = { .owner = THIS_MODULE };
     struct file *dummy = anon_inode_getfile("dummy", &tmp, NULL, 0);
     if (IS_ERR(dummy)) {
         pr_err("file_wrapper: initialize anon_inode_mnt failed, can't get file: %ld\n", PTR_ERR(dummy));
-        return;
+        return PTR_ERR(dummy);
     }
     anon_inode_mnt = dummy->f_path.mnt;
     if (unlikely(!anon_inode_mnt)) {
         pr_err("file_wrapper: initialize anon_inode_mnt failed, got NULL\n");
+        fput(dummy);
+        return -ENOENT;
     }
     fput(dummy);
 #endif
+    return 0;
 }

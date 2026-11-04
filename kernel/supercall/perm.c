@@ -3,28 +3,30 @@
 #include "supercall/internal.h"
 #include "manager/manager_identity.h"
 #include "policy/allowlist.h"
+#include "milksu_root.h"
 
 bool only_manager(void)
 {
-    return is_manager();
+    return milksu_root_is_ready() && is_manager();
 }
 
 bool only_root(void)
 {
-    return current_uid().val == 0;
+    return milksu_root_is_ready() && current_uid().val == 0;
 }
 
 bool manager_or_root(void)
 {
-    return current_uid().val == 0 || is_manager();
+    return milksu_root_is_ready() && (current_uid().val == 0 || is_manager());
 }
 
 bool always_allow(void)
 {
-    return true;
+    return milksu_root_is_ready();
 }
 
 bool allowed_for_su(void)
 {
-    return is_manager() || ksu_is_allow_uid_for_current(current_uid().val);
+    return milksu_root_is_ready() &&
+           (is_manager() || ksu_is_allow_uid_for_current(current_uid().val));
 }

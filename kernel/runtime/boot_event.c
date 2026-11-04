@@ -1,4 +1,5 @@
 #include "feature/selinux_hide.h"
+#include "feature/avc_spoof.h"
 #include <linux/err.h>
 #include <linux/fs.h>
 #include <linux/namei.h>
@@ -11,6 +12,7 @@
 #include "runtime/ksud.h"
 #include "manager/manager_observer.h"
 #include "manager/throne_tracker.h"
+#include "milksu_root.h"
 
 bool ksu_module_mounted __read_mostly = false;
 bool ksu_boot_completed __read_mostly = false;
@@ -18,6 +20,9 @@ bool ksu_boot_completed __read_mostly = false;
 void on_post_fs_data(void)
 {
     static bool done = false;
+
+    if (!milksu_root_is_ready())
+        return;
 
     if (done) {
         pr_info("on_post_fs_data already done\n");
@@ -61,14 +66,20 @@ int nuke_ext4_sysfs(const char *mnt)
 
 void on_module_mounted(void)
 {
+    if (!milksu_root_is_ready())
+        return;
     pr_info("on_module_mounted!\n");
     ksu_module_mounted = true;
 }
 
 void on_boot_completed(void)
 {
+    if (!milksu_root_is_ready())
+        return;
     ksu_boot_completed = true;
     pr_info("on_boot_completed!\n");
     track_throne(true);
+    ksu_avc_spoof_late_init();
+    ksu_feature_apply_forced();
     ksu_selinux_hide_drop_backup_if_unused();
 }

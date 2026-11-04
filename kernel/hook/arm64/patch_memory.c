@@ -2,7 +2,6 @@
 /*
  * Copyright (C) 2023 bmax121. All Rights Reserved.
  */
-
 #ifdef __aarch64__
 
 #include "../patch_memory.h"
@@ -83,11 +82,11 @@ fail:
 // https://cs.android.com/android/_/android/kernel/common/+/6d9f07d8f1ffc310a6877153fe882f35ae380799
 // So we need to grep kernel source code to detect which one to use.
 #if KSU_NEW_DCACHE_FLUSH
-#define ksu_flush_dcache(start, sz)                                                                                    \
-    ({                                                                                                                 \
-        unsigned long __start = (start);                                                                               \
-        unsigned long __end = __start + (sz);                                                                          \
-        dcache_clean_inval_poc(__start, __end);                                                                        \
+#define ksu_flush_dcache(start, sz)                                            \
+    ({                                                                         \
+        unsigned long __start = (start);                                       \
+        unsigned long __end = __start + (sz);                                  \
+        dcache_clean_inval_poc(__start, __end);                                \
     })
 #define ksu_flush_icache(start, end) caches_clean_inval_pou(start, end)
 #else
@@ -98,6 +97,7 @@ fail:
 struct patch_text_info {
     void *dst;
     void *src;
+    const void *expected;
     size_t len;
     atomic_t cpu_count;
     int flags;
@@ -162,7 +162,20 @@ static int ksu_patch_text_cb(void *arg)
 
     /* The last CPU becomes master */
     if (atomic_inc_return(&pp->cpu_count) == num_online_cpus()) {
-        ret = ksu_patch_text_nosync(dst, src, len, flags);
+        if (pp->expected && memcmp(dst, pp->expected, len))
+            ret = -EBUSY;
+        else
+            ret = ksu_patch_text_nosync(dst, src, len, flags);
+        if (!ret && memcmp(dst, src, len))
+            ret = -EIO;
+        if (ret && ret != -EBUSY && pp->expected) {
+            int restore_ret;
+
+            /* A failed copy may have touched bytes: repair before CPUs resume. */
+            restore_ret = ksu_patch_text_nosync(dst, (void *)pp->expected, len, flags);
+            if (restore_ret || memcmp(dst, pp->expected, len))
+                ret = -EUCLEAN;
+        }
         /* Notify other processors with an additional increment. */
         atomic_inc(&pp->cpu_count);
     } else {
@@ -174,21 +187,30 @@ static int ksu_patch_text_cb(void *arg)
     return ret;
 }
 
-int ksu_patch_text(void *dst, void *src, size_t len, int flags)
+int ksu_patch_text_checked(void *dst, const void *expected, void *src, size_t len, int flags)
 {
     int ret;
     struct patch_text_info info = {
         .dst = dst,
         .src = src,
+        .expected = expected,
         .len = len,
         .cpu_count = ATOMIC_INIT(0),
         .flags = flags,
     };
 
+    if (!dst || !src || !len || offset_in_page(dst) + len > PAGE_SIZE)
+        return -EINVAL;
+
     ret = stop_machine(ksu_patch_text_cb, &info, cpu_online_mask);
     if (ret)
         pr_err("failed to patch kernel address 0x%lx: %d\n", (unsigned long)dst, ret);
     return ret;
+}
+
+int ksu_patch_text(void *dst, void *src, size_t len, int flags)
+{
+    return ksu_patch_text_checked(dst, NULL, src, len, flags);
 }
 
 /*

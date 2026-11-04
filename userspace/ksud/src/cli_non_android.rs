@@ -5,7 +5,7 @@ use crate::boot_patch::{BootPatchArgs, BootRestoreArgs};
 use crate::lkm_image::BootPatchV2Args;
 use crate::{apk_sign, defs};
 
-/// KernelSU cli for non-android
+/// MilkSU image tools
 #[derive(Parser, Debug)]
 #[command(author, version = defs::VERSION_NAME, about, long_about = None)]
 struct Args {
@@ -15,13 +15,19 @@ struct Args {
 
 #[derive(clap::Subcommand, Debug)]
 enum Commands {
-    /// Patch boot or init_boot images to apply KernelSU
+    /// Inspect or transform the kernel of a boot image
+    KpmImage {
+        #[command(subcommand)]
+        command: crate::kpm_image::ImageCommand,
+    },
+
+    /// Patch boot or init_boot images to apply MilkSU
     BootPatch(BootPatchArgs),
 
-    /// Restore boot or init_boot images patched by KernelSU
+    /// Restore boot or init_boot images patched by MilkSU
     BootRestore(BootRestoreArgs),
 
-    /// Patch KernelSU into a boot image
+    /// Patch MilkSU into a boot image
     ///
     /// Always operates on a boot image; never selects init_boot or vendor_boot.
     BootPatchV2(BootPatchV2Args),
@@ -44,6 +50,7 @@ pub fn run() -> Result<()> {
     log::info!("command: {:?}", cli.command);
 
     let result = match cli.command {
+        Commands::KpmImage { command } => crate::kpm_image::run_image_command(command),
         Commands::GetSign { apk } => {
             let sign = apk_sign::get_apk_signature(&apk)?;
             println!("size: {:#x}, hash: {}", sign.0, sign.1);

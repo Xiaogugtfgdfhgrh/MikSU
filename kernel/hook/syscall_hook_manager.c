@@ -10,6 +10,7 @@
 #include <linux/version.h>
 #include <linux/sched/task_stack.h>
 #include <linux/compat.h>
+#include <linux/err.h>
 
 #include "arch.h"
 #include "klog.h" // IWYU pragma: keep
@@ -19,6 +20,7 @@
 #include "hook/setuid_hook.h"
 #include "hook/syscall_hook.h"
 #include "hook/syscall_event_bridge.h"
+#include "milksu_root.h"
 #if defined(__riscv)
 #include "hook/riscv64/syscall_regs.h"
 #endif
@@ -29,7 +31,7 @@ static struct kretprobe *init_kretprobe(const char *name, kretprobe_handler_t ha
 {
     struct kretprobe *rp = kzalloc(sizeof(struct kretprobe), GFP_KERNEL);
     if (!rp)
-        return NULL;
+        return ERR_PTR(-ENOMEM);
     rp->kp.symbol_name = name;
     rp->handler = handler;
     rp->data_size = 0;
@@ -39,7 +41,7 @@ static struct kretprobe *init_kretprobe(const char *name, kretprobe_handler_t ha
     pr_info("hook_manager: register_%s kretprobe: %d\n", name, ret);
     if (ret) {
         kfree(rp);
-        return NULL;
+        return ERR_PTR(ret);
     }
 
     return rp;
@@ -48,8 +50,10 @@ static struct kretprobe *init_kretprobe(const char *name, kretprobe_handler_t ha
 static void destroy_kretprobe(struct kretprobe **rp_ptr)
 {
     struct kretprobe *rp = *rp_ptr;
-    if (!rp)
+    if (IS_ERR_OR_NULL(rp)) {
+        *rp_ptr = NULL;
         return;
+    }
     unregister_kretprobe(rp);
     synchronize_rcu();
     kfree(rp);
@@ -96,6 +100,8 @@ static struct kretprobe *syscall_unregfunc_rp = NULL;
 // sys_enter handler: redirect hooked syscalls to the dispatcher
 static void ksu_sys_enter_handler(void *data, struct pt_regs *regs, long id)
 {
+    if (!milksu_root_is_ready())
+        return;
 #if defined(__x86_64__)
     if (unlikely(in_compat_syscall()))
 #elif defined(__aarch64__) || defined(__riscv)
@@ -125,61 +131,103 @@ static void ksu_sys_enter_handler(void *data, struct pt_regs *regs, long id)
 }
 #endif
 
-void __init ksu_syscall_hook_manager_init(void)
+static const struct {
+    int nr;
+    ksu_syscall_hook_fn fn;
+} hook_routes[] = {
+    { __NR_setresuid, ksu_hook_setresuid },
+    { __NR_execve, ksu_hook_execve },
+    { __NR_execveat, ksu_hook_execveat },
+    { __NR_newfstatat, ksu_hook_newfstatat },
+    { __NR_faccessat, ksu_hook_faccessat },
+};
+
+static unsigned int registered_routes;
+static bool trace_registered;
+static bool setuid_initialized;
+static bool sucompat_initialized;
+
+int __init ksu_syscall_hook_manager_init(void)
 {
     int ret;
     pr_info("hook_manager: ksu_hook_manager_init called\n");
 
+#ifndef CONFIG_HAVE_SYSCALL_TRACEPOINTS
+    return -EOPNOTSUPP;
+#endif
+
+    ret = ksu_setuid_hook_init();
+    if (ret)
+        return ret;
+    setuid_initialized = true;
+    ret = ksu_sucompat_init();
+    if (ret)
+        goto fail;
+    sucompat_initialized = true;
+
+    while (registered_routes < ARRAY_SIZE(hook_routes)) {
+        ret = ksu_register_syscall_hook(hook_routes[registered_routes].nr,
+                                       hook_routes[registered_routes].fn);
+        if (ret)
+            goto fail;
+        registered_routes++;
+    }
+
 #ifdef CONFIG_KRETPROBES
     syscall_regfunc_rp = init_kretprobe("syscall_regfunc", syscall_regfunc_handler);
+    if (IS_ERR(syscall_regfunc_rp)) {
+        ret = PTR_ERR(syscall_regfunc_rp);
+        goto fail;
+    }
     syscall_unregfunc_rp = init_kretprobe("syscall_unregfunc", syscall_unregfunc_handler);
-#endif
-
-    // Register syscall hooks via dispatcher
-    ksu_register_syscall_hook(__NR_setresuid, ksu_hook_setresuid);
-    ksu_register_syscall_hook(__NR_execve, ksu_hook_execve);
-    ksu_register_syscall_hook(__NR_execveat, ksu_hook_execveat);
-    ksu_register_syscall_hook(__NR_newfstatat, ksu_hook_newfstatat);
-    ksu_register_syscall_hook(__NR_faccessat, ksu_hook_faccessat);
-
-#ifdef CONFIG_HAVE_SYSCALL_TRACEPOINTS
-    ret = register_trace_prio_sys_enter(ksu_sys_enter_handler, NULL, INT_MIN);
-#ifndef CONFIG_KRETPROBES
-    ksu_mark_running_process_locked();
-#endif
-    if (ret) {
-        pr_err("hook_manager: failed to register sys_enter tracepoint: %d\n", ret);
-    } else {
-        pr_info("hook_manager: sys_enter tracepoint registered\n");
+    if (IS_ERR(syscall_unregfunc_rp)) {
+        ret = PTR_ERR(syscall_unregfunc_rp);
+        goto fail;
     }
 #endif
 
-    ksu_setuid_hook_init();
-    ksu_sucompat_init();
+#ifdef CONFIG_HAVE_SYSCALL_TRACEPOINTS
+    ret = register_trace_prio_sys_enter(ksu_sys_enter_handler, NULL, INT_MIN);
+    if (ret) {
+        pr_err("hook_manager: failed to register sys_enter tracepoint: %d\n", ret);
+        goto fail;
+    }
+    trace_registered = true;
+#ifndef CONFIG_KRETPROBES
+    ksu_mark_all_process();
+#endif
+#endif
+
+    return 0;
+fail:
+    ksu_syscall_hook_manager_exit();
+    return ret;
 }
 
-void __exit ksu_syscall_hook_manager_exit(void)
+void ksu_syscall_hook_manager_exit(void)
 {
     pr_info("hook_manager: ksu_hook_manager_exit called\n");
 #ifdef CONFIG_HAVE_SYSCALL_TRACEPOINTS
-    unregister_trace_sys_enter(ksu_sys_enter_handler, NULL);
-    tracepoint_synchronize_unregister();
-    pr_info("hook_manager: sys_enter tracepoint unregistered\n");
+    if (trace_registered) {
+        unregister_trace_sys_enter(ksu_sys_enter_handler, NULL);
+        tracepoint_synchronize_unregister();
+        trace_registered = false;
+    }
 #endif
 
 #ifdef CONFIG_KRETPROBES
-    destroy_kretprobe(&syscall_regfunc_rp);
     destroy_kretprobe(&syscall_unregfunc_rp);
+    destroy_kretprobe(&syscall_regfunc_rp);
 #endif
 
-    ksu_unregister_syscall_hook(__NR_setresuid);
-    ksu_unregister_syscall_hook(__NR_execve);
-    ksu_unregister_syscall_hook(__NR_execveat);
-    ksu_unregister_syscall_hook(__NR_newfstatat);
-    ksu_unregister_syscall_hook(__NR_faccessat);
-
-    ksu_syscall_hook_exit();
-
-    ksu_sucompat_exit();
-    ksu_setuid_hook_exit();
+    while (registered_routes)
+        ksu_unregister_syscall_hook(hook_routes[--registered_routes].nr);
+    if (sucompat_initialized) {
+        ksu_sucompat_exit();
+        sucompat_initialized = false;
+    }
+    if (setuid_initialized) {
+        ksu_setuid_hook_exit();
+        setuid_initialized = false;
+    }
 }

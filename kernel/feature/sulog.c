@@ -36,7 +36,7 @@ bool ksu_sulog_is_enabled(void)
     return ksu_sulog_enabled;
 }
 
-void __init ksu_sulog_init(void)
+int __init ksu_sulog_init(void)
 {
     int ret;
 
@@ -45,20 +45,21 @@ void __init ksu_sulog_init(void)
     ret = ksu_register_feature_handler(&sulog_handler);
     if (ret) {
         pr_err("Failed to register sulog feature handler\n");
-        return;
+        return ret;
     }
 
     ret = ksu_sulog_events_init();
     if (ret) {
         pr_err("Failed to initialize sulog events: %d\n", ret);
         ksu_unregister_feature_handler(KSU_FEATURE_SULOG);
-        return;
+        return ret;
     }
 
     ksu_sulog_fd_init();
+    return 0;
 }
 
-void __exit ksu_sulog_exit(void)
+void ksu_sulog_exit(void)
 {
     ksu_sulog_fd_exit();
     ksu_sulog_events_exit();

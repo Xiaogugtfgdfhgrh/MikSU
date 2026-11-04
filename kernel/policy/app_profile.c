@@ -18,6 +18,7 @@
 #include "selinux/selinux.h"
 #include "infra/su_mount_ns.h"
 #include "hook/tp_marker.h"
+#include "milksu_root.h"
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 7, 0)
 static struct group_info root_groups = { .usage = REFCOUNT_INIT(2) };
@@ -25,11 +26,11 @@ static struct group_info root_groups = { .usage = REFCOUNT_INIT(2) };
 static struct group_info root_groups = { .usage = ATOMIC_INIT(2) };
 #endif
 
-void setup_groups(struct root_profile *profile, struct cred *cred)
+static int setup_groups(struct root_profile *profile, struct cred *cred)
 {
     if (profile->groups_count > KSU_MAX_GROUPS) {
         pr_warn("Failed to setgroups, too large group: %d!\n", profile->uid);
-        return;
+        return -EINVAL;
     }
 
     if (profile->groups_count == 1 && profile->groups[0] == 0) {
@@ -37,14 +38,14 @@ void setup_groups(struct root_profile *profile, struct cred *cred)
         if (cred->group_info)
             put_group_info(cred->group_info);
         cred->group_info = get_group_info(&root_groups);
-        return;
+        return 0;
     }
 
     u32 ngroups = profile->groups_count;
     struct group_info *group_info = groups_alloc(ngroups);
     if (!group_info) {
         pr_warn("Failed to setgroups, ENOMEM for: %d\n", profile->uid);
-        return;
+        return -ENOMEM;
     }
 
     int i;
@@ -54,7 +55,7 @@ void setup_groups(struct root_profile *profile, struct cred *cred)
         if (!gid_valid(kgid)) {
             pr_warn("Failed to setgroups, invalid gid: %d\n", gid);
             put_group_info(group_info);
-            return;
+            return -EINVAL;
         }
         group_info->gid[i] = kgid;
     }
@@ -62,6 +63,7 @@ void setup_groups(struct root_profile *profile, struct cred *cred)
     groups_sort(group_info);
     set_groups(cred, group_info);
     put_group_info(group_info);
+    return 0;
 }
 
 void seccomp_filter_release(struct task_struct *tsk);
@@ -131,6 +133,9 @@ int escape_with_root_profile(void)
     struct root_profile *profile = NULL;
     struct user_struct *new_user;
 
+    if (!milksu_root_is_ready())
+        return -EHOSTDOWN;
+
     cred = prepare_creds();
     if (!cred) {
         pr_warn("prepare_creds failed!\n");
@@ -144,6 +149,7 @@ int escape_with_root_profile(void)
 
     if (test_thread_flag(TIF_KSU_DISABLE_ESCAPE_WITH_ROOT)) {
         pr_warn("TIF_KSU_DISABLE_ESCAPE_WITH_ROOT found, don't escape!\n");
+        ret = -EPERM;
         goto out_abort_creds;
     }
 
@@ -186,7 +192,8 @@ int escape_with_root_profile(void)
     // https://github.com/torvalds/linux/commit/905ae01c4ae2ae3df05bb141801b1db4b7d83c61#diff-ff6060da281bd9ef3f24e17b77a9b0b5b2ed2d7208bb69b29107bee69732bd31
     // on older kernels, per-UID process accounting lives in user_struct.
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 14, 0)
-    if (set_cred_ucounts(cred)) {
+    ret = set_cred_ucounts(cred);
+    if (ret) {
         goto out_abort_creds;
     }
 #endif
@@ -199,8 +206,12 @@ int escape_with_root_profile(void)
         memcpy(&cred->cap_ambient, &profile->capabilities.effective, sizeof(cred->cap_ambient));
     }
 
-    setup_groups(profile, cred);
-    setup_selinux(profile->selinux_domain, cred);
+    ret = setup_groups(profile, cred);
+    if (ret)
+        goto out_abort_creds;
+    ret = setup_selinux(profile->selinux_domain, cred);
+    if (ret)
+        goto out_abort_creds;
 
     commit_creds(cred);
 
@@ -233,7 +244,10 @@ void escape_to_root_for_init(void)
         return;
     }
 
-    setup_selinux(KERNEL_SU_CONTEXT, cred);
+    if (setup_selinux(KERNEL_SU_CONTEXT, cred)) {
+        abort_creds(cred);
+        return;
+    }
     commit_creds(cred);
 }
 

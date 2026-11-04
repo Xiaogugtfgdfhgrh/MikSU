@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import me.weishu.kernelsu.data.repository.SettingsRepository
 import me.weishu.kernelsu.data.repository.SettingsRepositoryImpl
+import me.weishu.kernelsu.data.model.MainTab
 import me.weishu.kernelsu.ksuApp
 import me.weishu.kernelsu.ui.UiMode
 import me.weishu.kernelsu.ui.theme.ThemeController
@@ -77,20 +78,26 @@ class MainActivityViewModel(
 }
 
 private const val SELECTED_MAIN_PAGE_KEY = "selected_main_page"
+private const val SELECTED_MAIN_TAB_KEY = "selected_main_tab"
 
 private class MainPageState(
     private val savedStateHandle: SavedStateHandle,
 ) {
-    val selectedPage: StateFlow<Int> = savedStateHandle.getStateFlow(SELECTED_MAIN_PAGE_KEY, 0)
+    private val page = MutableStateFlow(
+        MainTab.restore(savedStateHandle[SELECTED_MAIN_TAB_KEY], savedStateHandle[SELECTED_MAIN_PAGE_KEY]).ordinal
+    )
+    val selectedPage: StateFlow<Int> = page.asStateFlow()
 
     fun updateSelectedPage(page: Int) {
-        savedStateHandle[SELECTED_MAIN_PAGE_KEY] = MainPagerConfig.coercePage(page)
+        val tab = MainTab.entries[MainPagerConfig.coercePage(page)]
+        savedStateHandle[SELECTED_MAIN_TAB_KEY] = tab.name
+        this.page.value = tab.ordinal
     }
 }
 
 object MainPagerConfig {
-    const val PAGE_COUNT = 4
-    const val LAST_PAGE_INDEX = PAGE_COUNT - 1
+    val PAGE_COUNT = MainTab.entries.size
+    val LAST_PAGE_INDEX = PAGE_COUNT - 1
 
     fun coercePage(page: Int): Int = page.coerceIn(0, LAST_PAGE_INDEX)
 }
