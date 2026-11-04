@@ -13,6 +13,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
@@ -54,6 +55,7 @@ fun HomePager(
     )
     val uriHandler = LocalUriHandler.current
     val context = LocalContext.current
+    val resources = LocalResources.current
     val loadingDialog = rememberLoadingDialog()
     val scope = rememberCoroutineScope()
     val latestIsCurrentPage by rememberUpdatedState(isCurrentPage)
@@ -77,9 +79,9 @@ fun HomePager(
                     if (error is CancellationException && error !is TimeoutCancellationException) throw error
                     Toast.makeText(
                         context,
-                        context.getString(
+                        resources.getString(
                             R.string.download_failed_content,
-                            release.assetName.ifBlank { context.getString(R.string.app_name) },
+                            release.assetName.ifBlank { resources.getString(R.string.app_name) },
                         ),
                         Toast.LENGTH_LONG,
                     ).show()
