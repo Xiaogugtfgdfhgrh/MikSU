@@ -168,6 +168,49 @@ class BuildVerifyTests(TemporaryAssets):
         self.put("out/" + ASSET_PATHS["kptools"], elf("stale-tool"))
         self.assert_asset_rejected("kptools")
 
+    def test_formal_release_rejects_undeclared_or_development_signing(self):
+        self.environment["MILKSU_REQUIRE_RELEASE_SIGNING"] = "1"
+        for profile, development in ((None, None), ("development", True),
+                                     ("release", True), ("release", "false")):
+            with self.subTest(profile=profile, development=development):
+                signing = self.read_json("out/private/certificate.json")
+                signing.update(signing_profile=profile, development_only=development)
+                self.put_json("out/private/certificate.json", signing)
+                with self.assertRaisesRegex(SystemExit, "release signing is required"):
+                    self.verify()
+                self.module_run.assert_not_called()
+                self.android_output.assert_not_called()
+                self.assertFalse(self.final_manifest.exists())
+
+    def test_formal_release_records_verified_signing_profile(self):
+        self.environment["MILKSU_REQUIRE_RELEASE_SIGNING"] = "1"
+        signing = self.read_json("out/private/certificate.json")
+        signing.update(signing_profile="release", development_only=False)
+        self.put_json("out/private/certificate.json", signing)
+        self.verify()
+        final = self.read_json("out/manifests/final-apk.json")
+        self.assertEqual(final["signing_profile"], "release")
+        self.assertIs(final["development_only"], False)
+        self.assertEqual(final["certificate_sha256"], self.certificate_hash)
+
+    def test_debuggable_and_test_only_manifest_attributes_block_publication(self):
+        for attribute in ("debuggable", "testOnly"):
+            for value in ("true", "(type 0x12)0xffffffff"):
+                with self.subTest(attribute=attribute, value=value):
+                    self.manifest_xml = "E: manifest\n  A: android:" + attribute + "=" + value + "\n"
+                    with self.assertRaisesRegex(SystemExit, "must"):
+                        self.verify()
+                    self.assertFalse(self.final_manifest.exists())
+
+    def test_false_debuggable_and_test_only_attributes_allow_publication(self):
+        self.manifest_xml = (
+            "E: manifest\n"
+            "  A: android:debuggable=(type 0x12)0x0\n"
+            "  A: android:testOnly=(type 0x12)0x0\n"
+        )
+        self.verify()
+        self.assertTrue(self.final_manifest.is_file())
+
     def test_each_changed_build_output_blocks_before_signer(self):
         for name, relative in ASSET_PATHS.items():
             with self.subTest(asset=name):

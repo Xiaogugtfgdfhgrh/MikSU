@@ -449,11 +449,11 @@ def build_plan(root, source_paths=None):
         acceptance_passes(name, reports[name])
     host_report = read_json(root, "out/manifests/host-kpatch-final.json")
     identifiers.update(device_identifiers(host_report))
-    password = "out/private/keystore-password"
-    if (root / password).exists():
-        token = read_input(root, password, 4096).strip()
-        if len(token) >= 6:
-            identifiers.add(token)
+    for password in ("out/private/keystore-password", "out/private/release-password"):
+        if (root / password).exists():
+            token = read_input(root, password, 4096).strip()
+            if len(token) >= 6:
+                identifiers.add(token)
     optional = {
         "susfs-runtime": "out/device-acceptance/susfs-runtime.json",
         "installed-artifact-identity": "out/device-acceptance/final-identity.json",
@@ -498,13 +498,21 @@ def build_plan(root, source_paths=None):
                 "Invalid APK package name")
         public_apk["package_name"] = package
 
+    if final_apk.get("signing_profile") == "release":
+        require(final_apk.get("development_only") is False, "Invalid release signing metadata")
+        apk_name = "MilkSU.apk"
+        public_apk.update(signing_profile="release", development_only=False)
+    else:
+        require(final_apk.get("signing_profile") in (None, "development"),
+                "Unknown APK signing profile")
+        apk_name = "MilkSU-dev.apk"
     entries, binaries = {}, []
-    binaries.append(add_binary(root, entries, "out/manager/MilkSU-dev.apk",
-                               "MilkSU-dev.apk", identifiers, apk_sha))
+    binaries.append(add_binary(root, entries, "out/manager/" + apk_name,
+                               apk_name, identifiers, apk_sha))
     require(binaries[-1]["bytes"] == public_apk["size"], "APK byte count differs from manifest")
     binaries.append(add_binary(root, entries, "out/ksud/arm64-v8a/ksud",
                                "ksud/arm64-v8a/ksud", identifiers, daemon_sha, elf=True))
-    verify_apk_daemon(entries["MilkSU-dev.apk"], entries["ksud/arm64-v8a/ksud"])
+    verify_apk_daemon(entries[apk_name], entries["ksud/arm64-v8a/ksud"])
     modules = read_json(root, "out/manifests/verified-modules.json")
     require(modules.get("errors") == [], "Module verification has not passed")
     embedded = read_json(root, "out/manifests/embedded-assets-aarch64.json")

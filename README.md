@@ -8,7 +8,8 @@ Source repository: https://github.com/Xiaogugtfgdfhgrh/MikSU
 
 The current source version is **0.2.0 (32800)**. Manager, daemon and root
 modules read `version.properties`; source commits do not alter the version.
-This repository currently publishes source only.
+The formally signed `v0.2.0` APK is named `MilkSU_0.2.0_32800.apk`.
+Stable APKs are distributed through this repository's GitHub Releases.
 
 The Manager restores its confirmed integration setting before drawing the
 navigation bar. Background state refreshes preserve the settings controls
@@ -60,8 +61,8 @@ flat payload contains no unadjusted string pointers. The engine build checks
 this ARM64 relocation constraint. The bundled ordinary-module installer
 normalizes Windows line endings before embedding.
 
-Development deliverables are prepared in `out/delivery/` by
-`tools/package-release.py`: source, the signed development APK, native assets
+Public deliverables are prepared in `out/delivery/` by
+`tools/package-release.py`: source, the signed release APK, native assets
 and selected validation conclusions. Both public archives exclude partition
 images, including stock-derived development images, exact device backups,
 raw device logs, device identifiers and signing material. The artifact archive
@@ -78,8 +79,25 @@ and validation inputs.
 Run the scripts in `tools/` from Ubuntu or WSL Ubuntu. Build dependencies and
 caches are kept outside the source tree. `tools/bootstrap-milksu.sh` prepares
 the toolchains; the `tools/build-*.sh` scripts build the individual components.
-The development certificate generated under `out/private/` must be used for
-both the manager APK and the kernel's manager-certificate parameters.
+Release signing retains the dedicated RSA-3072 private key and exact public
+certificate used in device acceptance. Promotion changes the keystore
+container, alias and password while preserving the signer identity, so APK
+upgrades and the kernel's Manager authentication continue to use the same
+certificate. This is the dedicated MilkSU identity, not Android's debug key.
+
+`tools/build-signing.sh` defaults to the `release` profile. Explicit
+`--promote-development` conversion retains the tested identity in
+`out/private/milksu-release.p12`, with alias `milksu-release` and its new password
+in `out/private/release-password`. The `development` profile is an explicit
+local-build option. Release builds set `MILKSU_SIGNING_PROFILE=release` and
+`MILKSU_REQUIRE_RELEASE_SIGNING=1`; the Manager signer and kernel certificate
+parameters must match the selected profile.
+
+CI references `MILKSU_RELEASE_KEYSTORE_B64` and
+`MILKSU_RELEASE_KEYSTORE_PASSWORD`. Configure both repository secrets before
+running the manual CI build. Local builds use the files under `out/private/`;
+changing the workflow does not upload the local private key. Signing material is
+excluded by the public source and artifact packaging checks.
 
 Build the root and SUSFS kernel modules, KPatch engine and tools, and ksuinit
 before embedding them in ksud and packaging the Android manager. A manager APK
@@ -105,6 +123,8 @@ BTF, and reports failures instead of claiming that an uninstalled hook works.
 SUSFS delegates to the same AVC service when the root extension is available.
 
 The Manager checks the latest stable Release of this repository by default.
+The first `v0.2.0` Release establishes the public signed baseline;
+publishing it does not demonstrate an update to a higher version.
 A future update must publish a non-draft, non-prerelease tag such as `v0.2.1`
 with an APK named `MilkSU_0.2.1_32801.apk`, built with an increased version code.
 Update assets must use the same application ID and signing identity. Missing

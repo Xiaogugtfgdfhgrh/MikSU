@@ -421,6 +421,34 @@ class PackageReleaseTests(unittest.TestCase):
         self.assertTrue(PACKAGE.source_allowed("tools/package-release.py"))
         self.assertTrue(PACKAGE.source_allowed("manager/gradle/wrapper/gradle-wrapper.jar"))
 
+    def test_release_signing_password_is_removed_from_source_candidates(self):
+        password = b"fixture-formal-release-password-not-for-publication"
+        self.put("out/private/release-password", password)
+        self.put("src/release-password-copy.txt", password)
+        plan = PACKAGE.build_plan(self.root, self.sources + ["src/release-password-copy.txt"])
+        self.assertNotIn("MilkSU/src/release-password-copy.txt", plan["source"])
+        self.assertTrue(all(password not in data for data in plan["source"].values()))
+        self.assertTrue(all(password not in data for data in plan["artifacts"].values()))
+
+    def test_release_profile_uses_formal_apk_instead_of_stale_development_file(self):
+        manifest = self.read_json("out/manifests/final-apk.json")
+        manifest.update(signing_profile="release", development_only=False)
+        self.json("out/manifests/final-apk.json", manifest)
+        self.put("out/manager/MilkSU.apk", self.apk)
+        self.put("out/manager/MilkSU-dev.apk", b"stale development APK")
+        plan = self.plan()
+        self.assertEqual(plan["artifacts"]["MilkSU.apk"], self.apk)
+        self.assertNotIn("MilkSU-dev.apk", plan["artifacts"])
+        self.assertEqual(plan["apk"]["signing_profile"], "release")
+        self.assertIs(plan["apk"]["development_only"], False)
+
+    def test_release_profile_rejects_development_metadata(self):
+        manifest = self.read_json("out/manifests/final-apk.json")
+        manifest.update(signing_profile="release", development_only=True)
+        self.json("out/manifests/final-apk.json", manifest)
+        with self.assertRaisesRegex(PACKAGE.PackagingError, "release signing"):
+            self.plan()
+
     def test_source_archives_preserve_tracked_execute_modes_and_uapi_links(self):
         self.put("tools/build-all.sh", b"#!/usr/bin/env bash\ntrue\n")
         self.put("src/helper", b"fixture executable")

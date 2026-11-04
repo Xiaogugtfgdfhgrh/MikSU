@@ -121,26 +121,13 @@ PY
                 milksu_die "Build ksud for $abi before Manager."
         done
         [[ -f "$MILKSU_OUT/private/certificate.json" ]] || bash "$MILKSU_ROOT/tools/build-signing.sh"
+        signing_init="$MILKSU_OUT/private/gradle-signing.init.gradle"
+        python3 "$MILKSU_ROOT/tools/signing_config.py" \
+            --metadata "$MILKSU_OUT/private/certificate.json" gradle-init --output "$signing_init"
         cd "$work/manager"
         sed -i 's/\r$//' gradlew
         milksu_run bash "$MILKSU_ROOT/tools/bootstrap-gradle.sh"
         mkdir -p "$GRADLE_USER_HOME"
-        signing_init="$MILKSU_OUT/private/gradle-signing.init.gradle"
-        python3 - "$MILKSU_OUT/private" "$signing_init" <<'PY'
-import json, pathlib, sys
-private, output = map(pathlib.Path, sys.argv[1:])
-properties = {
-    "KEYSTORE_FILE": str(private / "milksu-dev.p12"),
-    "KEYSTORE_PASSWORD": (private / "keystore-password").read_text().strip(),
-    "KEY_ALIAS": "milksu-dev",
-    "KEY_PASSWORD": (private / "keystore-password").read_text().strip(),
-}
-lines = ["gradle.beforeProject { p ->"]
-lines += [f"  p.ext.set({json.dumps(k)}, {json.dumps(v)})" for k, v in properties.items()]
-lines += ["}"]
-output.write_text("\n".join(lines) + "\n")
-output.chmod(0o600)
-PY
         gradle_arguments=(
             --no-daemon --console=plain --max-workers=1
             -Pandroid.r8.maxWorkers=1 -Dorg.gradle.parallel=false
@@ -177,32 +164,21 @@ PY
         # Repack in a temporary view with the existing helper's expected target layout.
         ln -sfn "$CARGO_TARGET_DIR" "$work/target"
         config="$MILKSU_OUT/private/repack-config.json"
-        python3 - "$MILKSU_OUT/private" "$config" "$abis" <<'PY'
-import json, pathlib, sys
-private, output = map(pathlib.Path, sys.argv[1:3])
-config = {
-    "app_build_type": "release", "ksud_build_type": "release",
-    "arch": sys.argv[3].split(), "output_name": "MilkSU-dev", "strip": False,
-    "signing": {
-        "keystore_path": str(private / "milksu-dev.p12"),
-        "key_alias": "milksu-dev",
-        "keystore_pass": "__MILKSU_PASSWORD_FILE__", "key_pass": "__MILKSU_PASSWORD_FILE__",
-    },
-}
-output.write_text(json.dumps(config, indent=2) + "\n")
-output.chmod(0o600)
-PY
+        python3 "$MILKSU_ROOT/tools/signing_config.py" \
+            --metadata "$MILKSU_OUT/private/certificate.json" repack-config --output "$config" --abis "$abis"
+        apk_name="$(python3 "$MILKSU_ROOT/tools/signing_config.py" \
+            --metadata "$MILKSU_OUT/private/certificate.json" apk-name)"
         milksu_run python3 "$MILKSU_ROOT/tools/build-repack.py" "$work" repack --config "$config" --out-dir "$MILKSU_OUT/manager"
-        milksu_run apksigner verify --verbose --print-certs "$MILKSU_OUT/manager/MilkSU-dev.apk"
-        milksu_run zipalign -c -P 16 4 "$MILKSU_OUT/manager/MilkSU-dev.apk"
-        python3 "$MILKSU_ROOT/tools/build-verify.py" "$MILKSU_OUT/manager/MilkSU-dev.apk"
-        python3 - "$work/version.properties" "$MILKSU_OUT/manager" <<'PY'
+        milksu_run apksigner verify --verbose --print-certs "$MILKSU_OUT/manager/$apk_name"
+        milksu_run zipalign -c -P 16 4 "$MILKSU_OUT/manager/$apk_name"
+        python3 "$MILKSU_ROOT/tools/build-verify.py" "$MILKSU_OUT/manager/$apk_name"
+        python3 - "$work/version.properties" "$MILKSU_OUT/manager" "$apk_name" <<'PY'
 import pathlib, shutil, sys
-version_file, directory = map(pathlib.Path, sys.argv[1:])
+version_file, directory = map(pathlib.Path, sys.argv[1:3])
 version = dict(line.split("=", 1) for line in version_file.read_text().splitlines() if "=" in line)
 name, code = version["MILKSU_VERSION_NAME"], version["MILKSU_VERSION_CODE"]
 target = directory / f"MilkSU_{name}_{code}.apk"
-shutil.copy2(directory / "MilkSU-dev.apk", target)
+shutil.copy2(directory / sys.argv[3], target)
 print(f"Stable release APK: {target}")
 PY
         ;;

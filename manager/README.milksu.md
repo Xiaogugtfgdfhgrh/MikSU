@@ -19,9 +19,31 @@ are ignored. Downloads are constrained to the configured GitHub repository.
 Reported size and SHA-256 are checked when supplied, and Android requires a
 matching app signer to install an update.
 
+The formally signed `v0.2.0` Release uses `MilkSU_0.2.0_32800.apk`.
+Positive update detection, download and installation from a higher-version
+Release have not completed device acceptance.
+An installed build with version code 32800 requires a higher version code
+for the Manager to offer an update.
+
 Release signing continues to use `KEYSTORE_FILE`, `KEYSTORE_PASSWORD`,
 `KEY_ALIAS` and `KEY_PASSWORD` through the existing apksign plugin. Secrets
-must be supplied by the build environment.
+must be supplied by the build environment. `tools/build-signing.sh` defaults
+to the `release` profile; `development` is selected explicitly for local
+development builds. Release builds require
+`MILKSU_SIGNING_PROFILE=release` and `MILKSU_REQUIRE_RELEASE_SIGNING=1`.
+
+The release identity promotes the dedicated RSA-3072 key already used for
+device acceptance, preserving the exact public certificate and private key
+for APK upgrade compatibility and kernel Manager authentication. Explicit
+`--promote-development` conversion changes the container, alias and password
+to `out/private/milksu-release.p12`, alias `milksu-release`, and
+`out/private/release-password`. It does not regenerate the certificate.
+
+The build workflow references `MILKSU_RELEASE_KEYSTORE_B64` and
+`MILKSU_RELEASE_KEYSTORE_PASSWORD`; configure both before running the manual
+CI build. Private signing files are excluded from public
+source archives and artifact uploads. The workflow builds manually and does
+not publish Releases automatically.
 
 Before the Android build, provide the real daemon at
 `app/src/main/jniLibs/arm64-v8a/libksud.so`. Do not substitute a placeholder:

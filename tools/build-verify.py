@@ -15,6 +15,10 @@ def main() -> None:
     apk = Path(sys.argv[1]).resolve()
     out = Path(os.environ.get("MILKSU_OUT", Path(__file__).resolve().parents[1] / "out"))
     certificate = json.loads((out / "private/certificate.json").read_text())
+    if os.environ.get("MILKSU_REQUIRE_RELEASE_SIGNING") == "1" and (
+            certificate.get("signing_profile") != "release" or
+            certificate.get("development_only") is not False):
+        raise SystemExit("Final APK blocked: verified release signing is required")
     root = Path(os.environ.get("MILKSU_ROOT", Path(__file__).resolve().parents[1]))
     release = configparser.ConfigParser(interpolation=None)
     release.read_string("[release]\n" + (root / "version.properties").read_text())
@@ -23,7 +27,7 @@ def main() -> None:
     verifier = (root / "kernel/manager/apk_sign.c").read_text()
     limit = re.search(r"#define\s+CERT_MAX_LENGTH\s+(\d+)", verifier)
     if limit and certificate["certificate_size"] > int(limit.group(1)):
-        raise SystemExit("Development certificate exceeds the kernel APK verifier limit")
+        raise SystemExit("Signing certificate exceeds the kernel APK verifier limit")
     module_command = [sys.executable, str(root / "tools/build-verify-modules.py")]
     if os.environ.get("MILKSU_REQUIRE_FULL_MATRIX", "1") != "1":
         module_command += ["--kmi", "android14-6.1", "--kmi", "android12-5.10"]
@@ -60,8 +64,11 @@ def main() -> None:
     manifest_xml = subprocess.check_output(
         ["aapt2", "dump", "xmltree", "--file", "AndroidManifest.xml", str(apk)], text=True
     )
-    if re.search(r"android:testOnly[^\\n]*=true", manifest_xml):
+    true_attribute = r"[^\n]*=(?:true|\(type 0x12\)0xffffffff)(?:\s|$)"
+    if re.search(r"android:testOnly" + true_attribute, manifest_xml):
         raise SystemExit("Final APK must install normally; testOnly is still enabled")
+    if re.search(r"android:debuggable" + true_attribute, manifest_xml):
+        raise SystemExit("Final APK must not be debuggable")
     expected = out / "ksud/arm64-v8a/ksud"
     with zipfile.ZipFile(apk) as archive:
         daemon = archive.read("lib/arm64-v8a/libksud.so")
@@ -79,6 +86,8 @@ def main() -> None:
         "certificate_sha256": match.group(1).lower(),
         "ksud_sha256": hashlib.sha256(daemon).hexdigest(),
     }
+    if certificate.get("signing_profile") == "release":
+        manifest.update(signing_profile="release", development_only=False)
     output = out / "manifests/final-apk.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(manifest, indent=2) + "\n")
