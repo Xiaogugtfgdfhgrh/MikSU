@@ -28,4 +28,7 @@ jobs:
       - name: Check source packaging and publication inputs
         run: |
           python3 -m unittest discover -s tools -p test_package_release.py -q
+          python3 -m unittest discover -s tools/tests -p test_build_pipeline.py -q
+          python3 -m unittest discover -s tools -p test_root_policy_acceptance.py -q
+          python3 -m unittest discover -s vendor/kpatch-next/kpms/milksu-test -p test_accept_device.py -q
           python3 tools/audit-public-source.py

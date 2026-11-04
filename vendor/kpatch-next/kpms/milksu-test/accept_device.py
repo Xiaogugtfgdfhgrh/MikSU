@@ -18,7 +18,7 @@ FIXTURES = (
     ("init_error", "milksu-test-init_error.kpm", "milksu-test-init-error"),
     ("exit_error", "milksu-test-exit_error.kpm", "milksu-test-exit-error"),
 )
-STATE_ROOT = "/data/adb/milksu/kpm"
+STATE_ROOT = "/data/adb/ksu/MilkSU/kpm"
 
 
 class AcceptanceFailure(Exception):

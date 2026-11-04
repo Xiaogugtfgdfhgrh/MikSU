@@ -81,9 +81,6 @@ Test conclusions record only the supplied reports; host checks do not
 establish device compatibility.
 """
 ACCEPTANCE_NAMES = ("root", "susfs", "kpm", "final", "kpm-modules")
-PUBLIC_IMAGE_NAMES = (
-    "MilkSU-init_boot.img", "MilkSU-KPM-boot.img", "MilkSU-KPM-restored-boot.img",
-)
 HOST_RESULT_FIELDS = {
     "baselib": ("groups_passed", "loader_helpers"),
     "loader": ("groups_passed", "text_boundary_cases"),
@@ -92,15 +89,6 @@ HOST_RESULT_FIELDS = {
     "native": ("tests_passed", "tests_failed", "tests_ignored", "tests_filtered",
                "test_targets"),
 }
-DEVELOPMENT_IMAGE_NOTES = b"""# Development acceptance images
-
-These stock-derived product images are development acceptance artifacts.
-MilkSU-init_boot.img contains allow_shell=1 bundled=1, which permits shell root.
-The MilkSU-dev.apk name and its development signing identity are retained.
-Original device backups, device-specific init_boot images, signing secrets,
-screenshots and raw device logs are excluded.
-Image checksums and validation conclusions are in manifests/images.json.
-"""
 SAFE_RESULTS = {"passed", "failed", "success", "error", "blocked", "incomplete",
                 "not_run", "not-run", "skipped", "pending"}
 BOOL_RESULTS = {
@@ -393,21 +381,6 @@ def add_checksums(entries, name, modes=None):
         if ((modes or {}).get(path, 0o100644) & 0o170000) != 0o120000).encode()
 
 
-def validation_relative(root, value):
-    require(isinstance(value, str), "Invalid image validation path")
-    value = value.replace("\\", "/")
-    prefix = root.as_posix()
-    aliases = [prefix]
-    if re.match(r"^[A-Za-z]:/", prefix):
-        aliases.append("/mnt/" + prefix[0].lower() + prefix[2:])
-    elif re.match(r"^/mnt/[a-z]/", prefix):
-        aliases.append(prefix[5].upper() + ":" + prefix[6:])
-    for alias in aliases:
-        if value.startswith(alias + "/"):
-            return relative_path(value[len(alias) + 1:])
-    return relative_path(value)
-
-
 def image_command(report, prefix):
     commands = report.get("commands")
     require(isinstance(commands, list), "Image validation commands are missing")
@@ -427,7 +400,7 @@ def image_option(arguments, name):
     return arguments[index]
 
 
-def product_images(root, entries, identifiers, report):
+def offline_image_summary(report, entries):
     require(isinstance(report, dict) and report.get("completed") is True
             and report.get("device_writes") is False
             and not report.get("error"), "Offline image validation has not passed")
@@ -440,37 +413,8 @@ def product_images(root, entries, identifiers, report):
             roundtrip.get("whole_image_identical") is True,
             "Stock image validation or restoration has not passed")
     root_command = image_command(report, ("boot-patch",))
-    patch_command = image_command(report, ("kpm-image", "patch"))
-    restore_command = image_command(report, ("kpm-image", "restore"))
-    stock_paths = []
-    for arguments, filename in ((root_command, "init_boot.img"), (patch_command, "boot.img")):
-        relative = validation_relative(root, image_option(arguments, "--boot"))
-        require(relative.parts[:2] == ("out", "stock") and len(relative.parts) >= 4
-                and relative.name == filename, "Product image was not generated from stock")
-        input_path(root, relative)
-        stock_paths.append(relative)
-    require(stock_paths[0].parent == stock_paths[1].parent,
-            "Product images use different stock releases")
-    expected_paths = (
-        (root_command, "--out", "out/images"),
-        (patch_command, "--out", "out/images/" + PUBLIC_IMAGE_NAMES[1]),
-        (patch_command, "--kpimg", "out/kpatch/aarch64/kpimg"),
-        (patch_command, "--kptools", "out/tools/kptools"),
-        (patch_command, "--kernel-backup", "out/offline-validation/kernel.original"),
-        (restore_command, "--boot", "out/images/" + PUBLIC_IMAGE_NAMES[1]),
-        (restore_command, "--kernel", "out/offline-validation/kernel.original"),
-        (restore_command, "--out", "out/images/" + PUBLIC_IMAGE_NAMES[2]),
-    )
-    for arguments, option, expected in expected_paths:
-        require(validation_relative(root, image_option(arguments, option)).as_posix() == expected,
-                "Unexpected product image validation path")
-    require(image_option(root_command, "--out-name") == PUBLIC_IMAGE_NAMES[0] and
-            root_command.count("--allow-shell") == 1,
-            "Root image development parameters were not validated")
-    config = root_report.get("ksu_config_entry", {})
-    require(isinstance(config, dict) and sha256_field(config, "sha256") ==
-            hashlib.sha256(b"allow_shell=1 bundled=1").hexdigest(),
-            "Root image development configuration is not verified")
+    image_command(report, ("kpm-image", "patch"))
+    image_command(report, ("kpm-image", "restore"))
     kmi = image_option(root_command, "--kmi")
     root_module = kmi + "_kernelsu.ko"
     require(MODULE_NAME.fullmatch(root_module), "Invalid validated root image KMI")
@@ -487,42 +431,12 @@ def product_images(root, entries, identifiers, report):
     require(sha256_field(roundtrip, "original_kernel_sha256") ==
             sha256_field(roundtrip, "restored_kernel_sha256"),
             "Restored stock kernel differs from offline validation")
-    stock = input_path(root, stock_paths[1])
-    before = stock.stat()
-    restored_sha = digest(stock)
-    with stock.open("rb") as stream:
-        header = stream.read(4096)
-        kernel_size = int.from_bytes(header[8:12], "little")
-        require(header[:8] == b"ANDROID!" and len(header) == 4096 and
-                int.from_bytes(header[40:44], "little") in (3, 4) and
-                0 < kernel_size <= before.st_size - 4096,
-                "Unsupported stock boot image layout")
-        kernel_hash = hashlib.sha256()
-        remaining = kernel_size
-        while remaining:
-            chunk = stream.read(min(remaining, 1024 * 1024))
-            require(chunk, "Truncated stock boot kernel")
-            kernel_hash.update(chunk)
-            remaining -= len(chunk)
-    require(kernel_hash.hexdigest() == roundtrip["original_kernel_sha256"],
-            "Stock kernel differs from offline validation")
-    after = stock.stat()
-    require((before.st_size, before.st_mtime_ns) == (after.st_size, after.st_mtime_ns),
-            "Stock image changed during verification")
-    expected_hashes = (sha256_field(root_report, "sha256"),
-                       sha256_field(roundtrip, "patched_image_sha256"), restored_sha)
-    images = []
-    for name, expected in zip(PUBLIC_IMAGE_NAMES, expected_hashes, strict=True):
-        item = add_binary(root, entries, "out/images/" + name, "images/" + name,
-                          identifiers, expected, limit=512 * 1024 * 1024)
-        if name == PUBLIC_IMAGE_NAMES[0]:
-            require(type(root_report.get("bytes")) is int and
-                    item["bytes"] == root_report["bytes"], "Root image byte count mismatch")
-            item["allow_shell"] = True
-        images.append(item)
-    entries["DEVELOPMENT-IMAGES.md"] = DEVELOPMENT_IMAGE_NOTES
-    return {"schema": 2, "images_included": True, "development_acceptance": True,
-            "original_backups_included": False, "images": images}
+    summary = public_results(report)
+    summary["root_image"] = {
+        key: root_report[key] for key in ("preserved_original_init", "native_assets_match")}
+    summary["kpm_roundtrip"] = {
+        key: roundtrip[key] for key in ("kernel_identical", "whole_image_identical")}
+    return summary
 
 
 def build_plan(root, source_paths=None):
@@ -568,18 +482,6 @@ def build_plan(root, source_paths=None):
     offline = "out/offline-validation/image-validation.json"
     offline_report = read_json(root, offline)
     identifiers.update(device_identifiers(offline_report))
-    summary = public_results(offline_report)
-    summary["root_image"] = {
-        key: offline_report["root_image"][key] for key in
-        ("preserved_original_init", "native_assets_match")
-        if key in offline_report.get("root_image", {})}
-    summary["kpm_roundtrip"] = {
-        key: offline_report["kpm_roundtrip"][key] for key in
-        ("kernel_identical", "whole_image_identical")
-        if key in offline_report.get("kpm_roundtrip", {})}
-    require(all(type(v) is bool for section in ("root_image", "kpm_roundtrip")
-                for v in summary[section].values()), "Invalid offline result")
-    reports["offline-images"] = summary
 
     final_apk = read_json(root, "out/manifests/final-apk.json")
     apk_sha = sha256_field(final_apk, "sha256")
@@ -638,7 +540,9 @@ def build_plan(root, source_paths=None):
                           sha256_field(assets[name], "sha256"), elf=elf)
         require(item["bytes"] == assets[name]["size"], "Embedded asset size mismatch")
         binaries.append(item)
-    images = product_images(root, entries, identifiers, offline_report)
+    reports["offline-images"] = offline_image_summary(offline_report, entries)
+    images = {"schema": 2, "images_included": False, "development_acceptance": True,
+              "original_backups_included": False, "images": []}
 
     source_entries, source_modes = {}, {}
     candidates = source_paths if source_paths is not None else source_candidates(root)

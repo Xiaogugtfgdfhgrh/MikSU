@@ -1,6 +1,7 @@
 """Host tests for the acceptance runner, never installed on the device."""
 
 import json
+import shlex
 import subprocess
 import unittest
 from pathlib import Path
@@ -83,6 +84,48 @@ class DeviceRunnerTests(unittest.TestCase):
         self.device().stored("test-id")
         self.assertEqual(run.call_count, 2)
         sleep.assert_called_once_with(1)
+
+    @patch("accept_device.subprocess.run")
+    def test_stored_fixture_checks_the_production_ksu_store(self, run):
+        module_id = "a" * 64
+        expected_path = f"/data/adb/ksu/MilkSU/kpm/{module_id}.kpm"
+
+        def verify_store(command, **options):
+            self.assertEqual(command[:4], ["adb", "-s", "TEST-SERIAL", "shell"])
+            outer = shlex.split(command[4])
+            self.assertEqual(outer[:2], ["su", "-c"])
+            self.assertEqual(shlex.split(outer[2]), ["test", "-f", expected_path])
+            self.assertEqual(options["timeout"], 10)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        run.side_effect = verify_store
+        device = self.device()
+        device.stored(module_id)
+        run.assert_called_once()
+        self.assertEqual(device.report["commands"][0]["exit_code"], 0)
+
+    @patch("accept_device.time.sleep")
+    @patch("accept_device.subprocess.run")
+    def test_legacy_store_file_cannot_hide_a_missing_production_file(self, run, sleep):
+        module_id = "b" * 64
+        legacy_path = f"/data/adb/milksu/kpm/{module_id}.kpm"
+        checked_paths = []
+
+        def legacy_file_only(command, **_options):
+            outer = shlex.split(command[4])
+            arguments = shlex.split(outer[2])
+            self.assertEqual(arguments[:2], ["test", "-f"])
+            checked_paths.append(arguments[2])
+            return subprocess.CompletedProcess(
+                command, 0 if arguments[2] == legacy_path else 1, "", "",
+            )
+
+        run.side_effect = legacy_file_only
+        with self.assertRaisesRegex(AcceptanceFailure, "Stored fixture"):
+            self.device().stored(module_id)
+        self.assertEqual(checked_paths, [f"/data/adb/ksu/MilkSU/kpm/{module_id}.kpm"])
+        run.assert_called_once()
+        sleep.assert_not_called()
 
     @patch("accept_device.subprocess.run")
     def test_real_missing_file_is_not_retried(self, run):

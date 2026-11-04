@@ -18,9 +18,13 @@ def main():
     parser.add_argument("--serial", required=True)
     parser.add_argument("--expect", choices=("granted", "denied"), required=True)
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument("--foreground", action="store_true",
+                        help="Launch ProbeActivity to keep the probe app in the foreground")
     args = parser.parse_args()
     nonce = uuid.uuid4().hex
     report = {"serial": args.serial, "expected": args.expect, "nonce": nonce,
+              "mode": "foreground" if args.foreground else "broadcast",
+              "read_log_as_root": True,
               "completed": False, "checks": [], "started_unix": time.time()}
 
     def adb(*arguments):
@@ -42,15 +46,26 @@ def main():
         check(match is not None, "Exactly the temporary acceptance package is selected")
         uid = int(match[1])
         check(uid >= 10000, "Probe runs as a real application UID")
-        adb("shell", shlex.join([
-            "am", "broadcast", "--include-stopped-packages", "--receiver-foreground",
-            "-a", PACKAGE + ".PROBE", "-n", PACKAGE + "/.ProbeReceiver",
-            "--es", "nonce", nonce,
-        ]))
+        if args.foreground:
+            adb("shell", shlex.join([
+                "am", "start", "-S", "-n", PACKAGE + "/.ProbeActivity",
+                "--es", "nonce", nonce,
+            ]))
+        else:
+            adb("shell", shlex.join([
+                "am", "broadcast", "--include-stopped-packages", "--receiver-foreground",
+                "-a", PACKAGE + ".PROBE", "-n", PACKAGE + "/.ProbeReceiver",
+                "--es", "nonce", nonce,
+            ]))
         deadline = time.monotonic() + 15
         event = None
         while time.monotonic() < deadline:
-            lines = adb("logcat", "-d", "-v", "raw", "-s", "MilkSUAcceptance:I", "*:S")
+            lines = adb("shell", shlex.join([
+                "su", "-c", shlex.join([
+                    "logcat", "-d", "-b", "all", "-v", "raw",
+                    "-s", "MilkSUAcceptance:I", "*:S",
+                ]),
+            ]))
             for line in reversed(lines.splitlines()):
                 try:
                     value = json.loads(line)

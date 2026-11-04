@@ -69,8 +69,9 @@ case "$stage" in
                 cp "$CARGO_TARGET_DIR/$triple/release/ksuinit" "$work/userspace/ksud/bin/$arch/ksuinit"
                 cp "$CARGO_TARGET_DIR/$triple/release/ksuinit" "$MILKSU_OUT/ksuinit/$abi/ksuinit"
             else
-                [[ -f "$work/userspace/ksud/bin/$arch/ksuinit" ]] ||
+                [[ -s "$MILKSU_OUT/ksuinit/$abi/ksuinit" ]] ||
                     milksu_die "Build ksuinit before ksud."
+                cp "$MILKSU_OUT/ksuinit/$abi/ksuinit" "$work/userspace/ksud/bin/$arch/ksuinit"
                 if [[ "$abi" == arm64-v8a ]]; then
                     for asset in kpimg kptools; do
                         [[ -s "$MILKSU_OUT/kpatch/aarch64/$asset" ]] || milksu_die "Missing source-built $asset."

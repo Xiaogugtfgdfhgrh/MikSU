@@ -32,6 +32,14 @@ def main() -> None:
         raise SystemExit("Final APK blocked: the KMI module set is incomplete or uses stale certificates")
     embedded_assets = json.loads((out / "manifests/embedded-assets-aarch64.json").read_text())
     by_name = {item["name"]: item for item in embedded_assets}
+    for name, path in (
+        ("ksuinit", out / "ksuinit/arm64-v8a/ksuinit"),
+        ("kpimg", out / "kpatch/aarch64/kpimg"),
+        ("kptools", out / "kpatch/aarch64/kptools"),
+    ):
+        expected = by_name.get(name)
+        if not path.is_file() or expected is None or expected["sha256"] != hashlib.sha256(path.read_bytes()).hexdigest():
+            raise SystemExit(f"Final APK blocked: daemon embedded asset is stale: {name}")
     for module in (out / "aarch64").glob("*.ko"):
         expected = by_name.get(module.name)
         if expected is None or expected["sha256"] != hashlib.sha256(module.read_bytes()).hexdigest():

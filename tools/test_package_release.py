@@ -262,16 +262,14 @@ class PackageReleaseTests(unittest.TestCase):
                 self.assertEqual((len(data), sha(data)), (item["bytes"], item["sha256"]))
             self.assert_checksums(archive, "MilkSU/")
         with zipfile.ZipFile(output / report["artifacts"]["path"]) as archive:
-            expected = set(self.binary_data) | set(self.image_data) | {
+            expected = set(self.binary_data) | {
                 "MilkSU-dev.apk", "manifests/release-artifacts.json",
-                "manifests/test-conclusions.json", "manifests/images.json", "SHA256SUMS",
-                "DEVELOPMENT-IMAGES.md"}
+                "manifests/test-conclusions.json", "manifests/images.json", "SHA256SUMS"}
             self.assertEqual(set(archive.namelist()), expected)
             self.assertEqual(archive.read("MilkSU-dev.apk"), self.apk)
             for name, data in self.binary_data.items():
                 self.assertEqual(archive.read(name), data)
-            for name, data in self.image_data.items():
-                self.assertEqual(archive.read(name), data)
+            self.assertFalse(set(self.image_data).intersection(archive.namelist()))
             conclusions = json.loads(archive.read("manifests/test-conclusions.json"))
             self.assertFalse(conclusions["reports"]["kpatch-x18-audit"]["passed"])
             self.assertTrue(conclusions["reports"]["offline-images"]["kpm_roundtrip"]
@@ -285,14 +283,10 @@ class PackageReleaseTests(unittest.TestCase):
             self.assertEqual(relocations["unadjusted_rodata_pointer_count"], 0)
             self.assertNotIn(self.cache_path.encode(), archive.read("manifests/test-conclusions.json"))
             image_list = json.loads(archive.read("manifests/images.json"))
-            expected_images = [PACKAGE.descriptor(name, data)
-                               for name, data in self.image_data.items()]
-            expected_images[0]["allow_shell"] = True
-            self.assertEqual(image_list["images"], expected_images)
-            self.assertTrue(image_list["images_included"])
+            self.assertEqual(image_list["images"], [])
+            self.assertFalse(image_list["images_included"])
             self.assertTrue(image_list["development_acceptance"])
             self.assertFalse(image_list["original_backups_included"])
-            self.assertIn(b"allow_shell=1", archive.read("DEVELOPMENT-IMAGES.md"))
             self.assertEqual(report["apk"]["certificate_sha256"], "a" * 64)
             self.assert_checksums(archive)
             for name in archive.namelist():
@@ -308,7 +302,7 @@ class PackageReleaseTests(unittest.TestCase):
         self.assertNotIn(self.serial.encode(), metadata)
         self.assertFalse(report["history_bundle_included"])
         self.assertFalse(report["exact_device_backups_included"])
-        self.assertTrue(report["images_included"])
+        self.assertFalse(report["images_included"])
         self.assertTrue(report["development_acceptance"])
         for kind in ("source", "artifacts"):
             data = (output / report[kind]["path"]).read_bytes()
@@ -658,30 +652,42 @@ class PackageReleaseTests(unittest.TestCase):
         conclusions = json.loads(self.plan()["artifacts"]["manifests/test-conclusions.json"])
         self.assertNotIn("kpatch-loader-relocations", conclusions["reports"])
 
-    def test_product_images_must_match_offline_hashes_and_restored_stock(self):
-        for relative, data in self.image_data.items():
-            with self.subTest(image=relative):
-                self.put("out/" + relative, data + b"changed")
-                with self.assertRaisesRegex(PACKAGE.PackagingError, "verification manifest"):
-                    self.plan()
-                self.put("out/" + relative, data)
+    def test_images_are_never_read_or_selected_even_with_matching_reports(self):
+        read_input = PACKAGE.read_input
 
-    def test_missing_products_or_offline_report_block_image_delivery(self):
+        def reject_image_read(root, relative, *arguments, **options):
+            name = str(relative).replace("\\", "/").lower()
+            self.assertFalse(name.startswith(("out/images/", "out/stock/", "out/device-backup/")))
+            self.assertNotIn(Path(name).suffix, {".img", ".kernel", ".dump"})
+            return read_input(root, relative, *arguments, **options)
+
+        with mock.patch.object(PACKAGE, "read_input", side_effect=reject_image_read):
+            plan = self.plan()
+        self.assertEqual(plan["images"]["images"], [])
+        self.assertFalse(plan["images"]["images_included"])
+        self.assertFalse(set(self.image_data).intersection(plan["artifacts"]))
+        self.assertNotIn("DEVELOPMENT-IMAGES.md", plan["artifacts"])
+
+    def test_missing_images_do_not_block_verified_generic_artifacts(self):
         for relative in [*("out/" + name for name in self.image_data),
-                         "out/offline-validation/image-validation.json"]:
-            with self.subTest(path=relative):
-                path = self.root / relative
-                data = path.read_bytes()
-                path.unlink()
-                with self.assertRaisesRegex(PACKAGE.PackagingError, "missing"):
-                    self.plan()
-                self.put(relative, data)
+                         "out/stock/fixture/init_boot.img", "out/stock/fixture/boot.img",
+                         "out/offline-validation/kernel.original"]:
+            (self.root / relative).unlink()
+        plan = self.plan()
+        self.assertEqual(plan["artifacts"]["MilkSU-dev.apk"], self.apk)
+        for name, data in self.binary_data.items():
+            self.assertEqual(plan["artifacts"][name], data)
+        self.assertFalse(plan["images"]["images_included"])
 
-    def test_failed_offline_validation_or_wrong_stock_provenance_blocks_images(self):
+    def test_missing_offline_report_still_blocks_publication(self):
+        (self.root / "out/offline-validation/image-validation.json").unlink()
+        with self.assertRaisesRegex(PACKAGE.PackagingError, "missing"):
+            self.plan()
+
+    def test_failed_offline_validation_cannot_be_published_as_passed(self):
         original = self.read_json("out/offline-validation/image-validation.json")
         for mutation in ("incomplete", "device-write", "restore-mismatch", "failed-command",
-                         "device-backup", "outside-root", "different-stock",
-                         "device-output", "unknown-config"):
+                         "kernel-mismatch", "error", "native-mismatch", "original-init"):
             with self.subTest(mutation=mutation):
                 report = json.loads(json.dumps(original))
                 if mutation == "incomplete":
@@ -692,49 +698,48 @@ class PackageReleaseTests(unittest.TestCase):
                     report["kpm_roundtrip"]["whole_image_identical"] = False
                 elif mutation == "failed-command":
                     report["commands"][1]["exit_code"] = 1
-                elif mutation == "device-backup":
-                    report["commands"][0]["arguments"][2] = "out/device-backup/init_boot.img"
-                elif mutation == "outside-root":
-                    report["commands"][0]["arguments"][2] = "/private/stock/init_boot.img"
-                elif mutation == "different-stock":
-                    report["commands"][0]["arguments"][2] = "out/stock/other/init_boot.img"
-                    self.put("out/stock/other/init_boot.img", b"other stock")
-                elif mutation == "device-output":
-                    report["commands"][0]["arguments"][-1] = "MilkSU-init_boot-device.img"
+                elif mutation == "kernel-mismatch":
+                    report["kpm_roundtrip"]["restored_kernel_sha256"] = "b" * 64
+                elif mutation == "error":
+                    report["error"] = self.raw_personal
+                elif mutation == "native-mismatch":
+                    report["root_image"]["native_assets_match"] = False
                 else:
-                    report["root_image"]["ksu_config_entry"]["sha256"] = sha(b"unverified")
+                    report["root_image"]["preserved_original_init"] = False
                 self.json("out/offline-validation/image-validation.json", report)
                 with self.assertRaises(PACKAGE.PackagingError):
                     self.plan()
 
-    def test_matching_image_hashes_do_not_allow_private_content(self):
-        original = self.read_json("out/offline-validation/image-validation.json")
-        for name, data in self.image_data.items():
-            with self.subTest(image=name):
-                report = json.loads(json.dumps(original))
-                private = self.serial.encode()
-                if name.endswith("/MilkSU-KPM-restored-boot.img"):
-                    report["kpm_roundtrip"].update(original_kernel_sha256=sha(private),
-                                                  restored_kernel_sha256=sha(private))
-                    private = boot_image(private)
-                self.put("out/" + name, private)
-                if name.endswith("/MilkSU-init_boot.img"):
-                    report["root_image"].update(sha256=sha(private), bytes=len(private))
-                elif name.endswith("/MilkSU-KPM-boot.img"):
-                    report["kpm_roundtrip"]["patched_image_sha256"] = sha(private)
-                else:
-                    self.put("out/stock/fixture/boot.img", private)
-                self.json("out/offline-validation/image-validation.json", report)
+    def test_matching_native_hashes_do_not_allow_private_content(self):
+        original = self.read_json("out/manifests/embedded-assets-aarch64.json")
+        for secret in (self.serial.encode(), self.password.encode(),
+                       b"-----BEGIN " + b"PRIVATE KEY-----\nfixture\n"):
+            with self.subTest(secret=secret):
+                private = self.binary_data["kpatch/aarch64/kpimg"] + secret
+                self.put("out/kpatch/aarch64/kpimg", private)
+                assets = json.loads(json.dumps(original))
+                entry = next(item for item in assets if item["name"] == "kpimg")
+                entry.update(sha256=sha(private), size=len(private))
+                self.json("out/manifests/embedded-assets-aarch64.json", assets)
                 with self.assertRaisesRegex(PACKAGE.PackagingError, "Unsafe binary"):
                     self.plan()
-                self.put("out/" + name, data)
 
-    def test_stock_changes_cannot_rebind_a_restored_image_to_an_old_report(self):
+    def test_changed_or_private_images_remain_excluded_from_both_archives(self):
         changed = boot_image(b"different stock kernel")
         self.put("out/stock/fixture/boot.img", changed)
         self.put("out/images/MilkSU-KPM-restored-boot.img", changed)
-        with self.assertRaisesRegex(PACKAGE.PackagingError, "Stock kernel differs"):
-            self.plan()
+        self.put("out/images/MilkSU-init_boot.img", self.raw_personal.encode())
+        self.sources += ["images/current.img", "kernel/boot.IMG",
+                         "firmware/partition.kernel", "out/stock/fixture/boot.img"]
+        for name in self.sources[-4:-1]:
+            self.put(name, self.raw_personal.encode())
+        report = PACKAGE.package_release(self.root, self.sources)
+        for kind in ("source", "artifacts"):
+            with zipfile.ZipFile(self.root / "out/delivery" / report[kind]["path"]) as archive:
+                for name in archive.namelist():
+                    self.assertNotIn(Path(name).suffix.lower(), {".img", ".kernel", ".dump"})
+                    self.assertNotIn(self.raw_personal.encode(), archive.read(name))
+        self.assertFalse(report["images_included"])
 
     def test_root_image_native_asset_evidence_must_match_delivered_binaries(self):
         report = self.read_json("out/offline-validation/image-validation.json")
@@ -743,7 +748,7 @@ class PackageReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(PACKAGE.PackagingError, "stale native assets"):
             self.plan()
 
-    def test_product_image_links_cannot_select_a_device_image(self):
+    def test_ignored_image_links_cannot_select_a_device_image(self):
         target = self.root / "out/images/MilkSU-init_boot-device.img"
         name = "out/images/MilkSU-init_boot.img"
         path = self.root / name
@@ -753,14 +758,26 @@ class PackageReleaseTests(unittest.TestCase):
             path.symlink_to(target)
         except OSError:
             self.skipTest("Host does not permit symlink creation")
-        with self.assertRaisesRegex(PACKAGE.PackagingError, "uses a link"):
-            self.plan()
+        plan = self.plan()
+        self.assertNotIn("images/MilkSU-init_boot.img", plan["artifacts"])
+        self.assertFalse(plan["images"]["images_included"])
 
-    def test_validation_paths_support_windows_and_wsl_without_leaking_paths(self):
-        for root, value in ((Path("D:/MilkSU"), "/mnt/d/MilkSU/out/stock/fixture/boot.img"),
-                            (Path("/mnt/d/MilkSU"), "D:\\MilkSU\\out\\stock\\fixture\\boot.img")):
-            self.assertEqual(PACKAGE.validation_relative(root, value).as_posix(),
-                             "out/stock/fixture/boot.img")
+    def test_offline_paths_and_boot_configuration_are_not_public_artifacts(self):
+        report = self.read_json("out/offline-validation/image-validation.json")
+        private_paths = ["D:\\private-device\\init_boot.img",
+                         "/mnt/d/private-device/boot.img", "/data/adb/private/current.img"]
+        for command, path in zip(report["commands"], private_paths, strict=True):
+            command["arguments"][command["arguments"].index("--boot") + 1] = path
+        report["root_image"]["ksu_config_entry"]["sha256"] = sha(b"bundled=1")
+        report["commands"][0]["arguments"].remove("--allow-shell")
+        self.json("out/offline-validation/image-validation.json", report)
+        plan = self.plan()
+        summary = plan["artifacts"]["manifests/test-conclusions.json"]
+        self.assert_public_metadata(json.loads(summary))
+        for path in private_paths:
+            self.assertNotIn(path.encode(), summary)
+            self.assertNotIn(json.dumps(path).encode(), summary)
+        self.assertFalse(plan["images"]["images_included"])
 
     @unittest.skipUnless(sys.platform != "win32" and shutil.which("unzip")
                          and shutil.which("sha256sum"), "Requires Linux unzip and sha256sum")

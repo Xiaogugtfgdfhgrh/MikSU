@@ -68,10 +68,12 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import me.weishu.kernelsu.R
+import me.weishu.kernelsu.data.model.MainTab
 import me.weishu.kernelsu.data.system.KpmModule
 import me.weishu.kernelsu.data.system.KpmReport
 import me.weishu.kernelsu.data.system.KpmStatus
 import me.weishu.kernelsu.ksuApp
+import me.weishu.kernelsu.ui.LocalMainPagerState
 import me.weishu.kernelsu.ui.LocalUiMode
 import me.weishu.kernelsu.ui.UiMode
 import me.weishu.kernelsu.ui.viewmodel.KpmViewModel
@@ -103,7 +105,10 @@ fun KpmPager(bottomInnerPadding: Dp, isCurrentPage: Boolean) {
     }
     val vm = systemViewModel()
     val state by vm.uiState.collectAsStateWithLifecycle()
+    val mainPagerState = LocalMainPagerState.current
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val kpmPage = mainPagerState.tabs.indexOf(MainTab.KPM)
+        if (kpmPage >= 0) mainPagerState.animateToPage(kpmPage)
         uri?.let { vm.importDocument(it) }
     }
     RefreshOnResume(isCurrentPage) { vm.refresh() }
@@ -114,12 +119,14 @@ fun KpmPager(bottomInnerPadding: Dp, isCurrentPage: Boolean) {
         onLoad = vm::selectModuleForLoad,
         onAction = vm::moduleAction,
         dialogs = {
-            KpmLoadDialog(state, vm::cancelImport, vm::loadImported)
-            KpmResultDialog(
-                state.output, stringResource(R.string.kpm_control_title), vm::dismissOutput,
-            )
-            if (state.pendingImport == null) {
-                KpmResultDialog(state.error?.display, stringResource(R.string.kpm_error), vm::dismissError)
+            if (isCurrentPage) {
+                KpmLoadDialog(state, vm::cancelImport, vm::loadImported)
+                KpmResultDialog(
+                    state.output, stringResource(R.string.kpm_control_title), vm::dismissOutput,
+                )
+                if (state.pendingImport == null) {
+                    KpmResultDialog(state.error?.display, stringResource(R.string.kpm_error), vm::dismissError)
+                }
             }
         },
     )

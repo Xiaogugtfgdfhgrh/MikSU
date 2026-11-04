@@ -15,31 +15,63 @@ navigation bar. Background state refreshes preserve the settings controls
 and KPM import action. The KPM page has its own title and direct module
 control cards, with a temporary-load confirmation after file selection.
 
-The first device validation target is ARM64 GKI `android14-6.1`. Other kernel
-targets require their own build and device validation.
+Device validation currently covers one physical ARM64 tablet running GKI
+`android14-6.1`. Other kernel targets require their own device validation.
 
 ## Validation Scope
 
-An earlier November 3, 2026 acceptance run completed on `android14-6.1`: application
-root grants, persistence and revocation; ordinary module installation,
-enable/disable, boot scripts and removal; KPM import, load, control and error
-handling; and SUSFS runtime path filtering. KPM and SUSFS automatic loading
-were checked across reboots, including disabling both settings afterward.
-Those results describe the earlier build. Changes made for 0.2.0, including
-the AVC feature and update checks, require a separate device acceptance run.
-Local builds and host tests establish compilation and protocol behavior,
-not compatibility with every vendor kernel.
+On November 4, 2026, MilkSU **0.2.0 (32800)** completed these checks on that
+single `android14-6.1` device:
+
+- The 0.2.0 Manager and matching new root module started successfully.
+- AVC log spoofing passed 24 checks using real SELinux AVC audit records.
+- Temporary SU disable passed 18 checks.
+- SUSFS integration off/on through the Manager UI passed 21 checks.
+- ARM64 SUSFS native acceptance passed 10 checks.
+- Manager UI root authorization, a profile using GID 2000, and authorization
+  revocation were verified. The foreground root-policy probe passed after
+  authorization; root log access and the foreground probe are used where
+  log visibility or OEM background broadcast delivery affects collection.
+- KPM fixture behavior and error handling passed 35 checks.
+- The repaired KPM document-picker flow passed 15 UI checks, including
+  returning to the KPM page after selection or cancellation and removing only
+  the new unloaded registration when its loading confirmation is cancelled.
+
+KPM integration completed a Manager UI off/on cycle and both reboots:
+
+- After disabling integration and the first reboot, the disabled state passed
+  18 checks.
+- Enabling integration through the UI reproduced the previous boot image
+  byte for byte. After the second reboot, 12 checks confirmed KPM was active,
+  the existing user driver's loaded and automatic-loading state matched the
+  baseline, SUSFS was loaded with automatic loading enabled, and AVC remained
+  enabled with its persisted setting and shared root/SUSFS service verified.
+- A final five-check comparison confirmed that the user driver's KPM state
+  and ordinary module configuration were unchanged from the baseline.
+
+These results apply to one device and kernel configuration. No compatible
+32-bit ABI was available, so 32-bit behavior was not tested. Positive Manager
+update detection, APK download and update installation were not tested because
+no Release was published. Local builds and host tests establish compilation
+and protocol behavior, not compatibility with other vendor kernels.
 
 KPM callback-section metadata uses inline character arrays so the movable
 flat payload contains no unadjusted string pointers. The engine build checks
 this ARM64 relocation constraint. The bundled ordinary-module installer
 normalizes Windows line endings before embedding.
 
-Development deliverables are written to `out/delivery/` by
-`tools/package-release.py`. They contain source, the signed development APK,
-native assets, stock-derived development images and selected validation
-conclusions. The root image uses `allow_shell=1 bundled=1`. Exact device
-backups and signing material stay in their local recovery directories.
+Development deliverables are prepared in `out/delivery/` by
+`tools/package-release.py`: source, the signed development APK, native assets
+and selected validation conclusions. Both public archives exclude partition
+images, including stock-derived development images, exact device backups,
+raw device logs, device identifiers and signing material. The artifact archive
+retains the legacy filename `MilkSU-build-and-images.zip`, but contains no
+partition images; its image manifest records `images_included=false`.
+Validation reports contribute only selected, sanitized conclusions.
+The root ramdisk used for the current validation retained `bundled=1`.
+`allow_shell=1` is an explicit opt-in, not a default root configuration
+requirement. Device images, backups and raw evidence remain local recovery
+and validation inputs.
 
 ## Build
 
