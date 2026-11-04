@@ -1,0 +1,11 @@
+name: Custom issue template
+description: Describe a MilkSU issue or suggestion.
+title: '[Custom]'
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: "Describe your problem."
+    validations:
+      required: true
+
