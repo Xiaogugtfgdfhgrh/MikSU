@@ -234,6 +234,8 @@ enum BootInfo {
 
 #[derive(clap::Subcommand, Debug)]
 enum Debug {
+    RefreshManager,
+
     /// Set the manager app, kernel CONFIG_KSU_DEBUG should be enabled.
     SetManager {
         /// manager package name
@@ -791,6 +793,10 @@ pub fn run() -> Result<()> {
         },
 
         Commands::Debug { command } => match command {
+            Debug::RefreshManager => {
+                utils::switch_mnt_ns(1).context("Cannot enter the system mount namespace")?;
+                ksucalls::refresh_manager_identity()
+            }
             Debug::SetManager { apk } => debug::set_manager(&apk),
             Debug::GetSign { apk } => {
                 let sign = apk_sign::get_apk_signature(&apk)?;

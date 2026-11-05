@@ -32,6 +32,7 @@ import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.SystemUpdateAlt
 import androidx.compose.material.icons.rounded.VerifiedUser
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -307,6 +308,35 @@ fun SettingPagerMiuix(
                                 enabled = uiState.avcSpoofStatus == "supported" && !uiState.avcSpoofBusy,
                                 checked = uiState.isAvcSpoofEnabled,
                                 onCheckedChange = actions.onSetAvcSpoofEnabled
+                            )
+
+                            val managerHideSummary = when {
+                                uiState.managerHideBusy -> stringResource(
+                                    if (uiState.isManagerHidden) R.string.settings_manager_hide_restoring
+                                    else R.string.settings_manager_hide_hiding
+                                )
+                                uiState.managerHideError != null -> uiState.managerHideError
+                                !uiState.managerHideSupported -> stringResource(R.string.settings_manager_hide_unsupported)
+                                else -> stringResource(R.string.settings_manager_hide_summary)
+                            }
+                            SwitchPreference(
+                                title = stringResource(R.string.settings_manager_hide),
+                                summary = managerHideSummary,
+                                startAction = {
+                                    Icon(
+                                        Icons.Rounded.VisibilityOff,
+                                        modifier = Modifier.padding(end = 6.dp),
+                                        contentDescription = stringResource(R.string.settings_manager_hide),
+                                        tint = if (uiState.managerHideSupported && !uiState.managerHideBusy) {
+                                            colorScheme.onBackground
+                                        } else {
+                                            colorScheme.disabledOnSecondaryVariant
+                                        }
+                                    )
+                                },
+                                enabled = uiState.managerHideSupported && !uiState.managerHideBusy,
+                                checked = uiState.isManagerHidden,
+                                onCheckedChange = actions.onSetManagerHidden
                             )
 
                             val sulogSummary = when (uiState.sulogStatus) {

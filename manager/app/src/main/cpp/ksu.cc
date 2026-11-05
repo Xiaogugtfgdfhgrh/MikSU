@@ -141,6 +141,19 @@ bool is_manager() {
     return legacy_get_info().first > 0;
 }
 
+bool is_manager_hide_supported() {
+    return verify_manager_access();
+}
+
+bool verify_manager_access() {
+    struct ksu_get_info_cmd info = {};
+    struct ksu_new_get_allow_list_cmd list = {};
+    const auto flags = KSU_GET_INFO_FLAG_MANAGER | KSU_GET_INFO_FLAG_MANAGER_HIDE;
+    return ksuctl(KSU_IOCTL_GET_INFO, &info) == 0 && info.version > 0 &&
+           (info.flags & flags) == flags && info.uapi_version == KERNEL_SU_UAPI_VERSION &&
+           ksuctl(KSU_IOCTL_NEW_GET_ALLOW_LIST, &list) == 0;
+}
+
 bool is_pr_build() {
     auto info = get_info();
     if (info.version > 0) {

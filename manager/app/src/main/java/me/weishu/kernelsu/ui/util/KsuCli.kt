@@ -331,7 +331,7 @@ fun restoreBoot(
 fun uninstallPermanently(
     onStdout: (String) -> Unit, onStderr: (String) -> Unit
 ): FlashResult {
-    val result = flashWithIO("${getKsuDaemonPath()} uninstall --package-name ${BuildConfig.APPLICATION_ID}", onStdout, onStderr)
+    val result = flashWithIO("${getKsuDaemonPath()} uninstall --package-name ${ksuApp.packageName}", onStdout, onStderr)
     return FlashResult(result)
 }
 

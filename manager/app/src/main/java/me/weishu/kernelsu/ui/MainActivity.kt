@@ -51,6 +51,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.core.view.doOnPreDraw
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -103,6 +104,7 @@ import me.weishu.kernelsu.ui.theme.LocalEnableFloatingBottomBarBlur
 import me.weishu.kernelsu.ui.theme.LocalEnableNavigationBadge
 import me.weishu.kernelsu.ui.theme.LocalModuleDescriptionMaxLines
 import me.weishu.kernelsu.ui.util.getSuperuserCount
+import me.weishu.kernelsu.ui.util.ManagerHiding
 import me.weishu.kernelsu.ui.util.install
 import me.weishu.kernelsu.ui.util.rememberBlurBackdrop
 import me.weishu.kernelsu.ui.util.rememberContentReady
@@ -208,7 +210,14 @@ class MainActivity : ComponentActivity() {
                             initialPage = selectedMainPage,
                             pagerInterceptionMode = uiState.pagerInterceptionMode,
                             onPageChanged = viewModel::setSelectedMainPage,
-                            onContentReady = { contentReady = true },
+                            onContentReady = {
+                                if (!contentReady) {
+                                    contentReady = true
+                                    window.decorView.doOnPreDraw {
+                                        window.decorView.post { ManagerHiding.onMainReady() }
+                                    }
+                                }
+                            },
                         )
                     }
 
@@ -291,6 +300,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         intentChannel.trySend(intent)
+        if (contentReady) ManagerHiding.onMainReady()
     }
 }
 
@@ -568,7 +578,7 @@ private fun MainScreenBackHandler(
     mainState: MainPagerState,
     navController: Navigator,
 ) {
-    val isPagerBackHandlerEnabled by remember {
+    val isPagerBackHandlerEnabled by remember(mainState, navController) {
         derivedStateOf {
             navController.current() is Route.Main && navController.backStackSize() == 1 && mainState.selectedPage != 0
         }

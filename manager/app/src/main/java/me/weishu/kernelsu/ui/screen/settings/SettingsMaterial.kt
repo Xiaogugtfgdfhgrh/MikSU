@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.SystemUpdateAlt
 import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.SnackbarHostState
@@ -249,6 +250,25 @@ fun SettingPagerMaterial(
                                 enabled = uiState.avcSpoofStatus == "supported" && !uiState.avcSpoofBusy,
                                 checked = uiState.isAvcSpoofEnabled,
                                 onCheckedChange = actions.onSetAvcSpoofEnabled
+                            )
+                        },
+                        {
+                            val managerHideSummary = when {
+                                uiState.managerHideBusy -> stringResource(
+                                    if (uiState.isManagerHidden) R.string.settings_manager_hide_restoring
+                                    else R.string.settings_manager_hide_hiding
+                                )
+                                uiState.managerHideError != null -> uiState.managerHideError
+                                !uiState.managerHideSupported -> stringResource(R.string.settings_manager_hide_unsupported)
+                                else -> stringResource(R.string.settings_manager_hide_summary)
+                            }
+                            SegmentedSwitchItem(
+                                icon = Icons.Filled.VisibilityOff,
+                                title = stringResource(R.string.settings_manager_hide),
+                                summary = managerHideSummary,
+                                enabled = uiState.managerHideSupported && !uiState.managerHideBusy,
+                                checked = uiState.isManagerHidden,
+                                onCheckedChange = actions.onSetManagerHidden
                             )
                         },
                         {

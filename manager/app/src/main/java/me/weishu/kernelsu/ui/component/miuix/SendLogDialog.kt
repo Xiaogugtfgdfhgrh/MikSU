@@ -24,7 +24,7 @@ import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import me.weishu.kernelsu.BuildConfig
+import me.weishu.kernelsu.ksuApp
 import me.weishu.kernelsu.R
 import me.weishu.kernelsu.ui.component.dialog.LoadingDialogHandle
 import me.weishu.kernelsu.ui.util.getBugreportFile
@@ -120,7 +120,7 @@ fun SendLogDialog(
                         val uri: Uri =
                             FileProvider.getUriForFile(
                                 context,
-                                "${BuildConfig.APPLICATION_ID}.fileprovider",
+                                "${ksuApp.packageName}.fileprovider",
                                 bugreport
                             )
 

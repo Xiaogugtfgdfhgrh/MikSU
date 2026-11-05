@@ -41,6 +41,10 @@ data class SettingsUiState(
     val avcSpoofStatus: String = "",
     val isAvcSpoofEnabled: Boolean = false,
     val avcSpoofBusy: Boolean = false,
+    val managerHideSupported: Boolean = false,
+    val isManagerHidden: Boolean = false,
+    val managerHideBusy: Boolean = false,
+    val managerHideError: String? = null,
 
     // SU Log
     val sulogStatus: String = "",
@@ -78,6 +82,7 @@ data class SettingsScreenActions(
     val onSetKernelUmountEnabled: (Boolean) -> Unit,
     val onSetSelinuxHideEnabled: (Boolean) -> Unit,
     val onSetAvcSpoofEnabled: (Boolean) -> Unit,
+    val onSetManagerHidden: (Boolean) -> Unit,
     val onSetSulogEnabled: (Boolean) -> Unit,
     val onSetAdbRootEnabled: (Boolean) -> Unit,
     val onSetShellSuAdbOnlyEnabled: (Boolean) -> Unit,

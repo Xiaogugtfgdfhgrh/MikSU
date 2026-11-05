@@ -149,7 +149,7 @@ fun SendLogBottomSheet(
                                 }
 
                                 val uri: Uri = FileProvider.getUriForFile(
-                                    context, "${BuildConfig.APPLICATION_ID}.fileprovider", bugreport
+                                    context, "${context.packageName}.fileprovider", bugreport
                                 )
 
                                 val shareIntent = Intent(Intent.ACTION_SEND).apply {

@@ -16,9 +16,11 @@ import me.weishu.kernelsu.R
 import me.weishu.kernelsu.ksuApp
 import me.weishu.kernelsu.ui.LocalUiMode
 import me.weishu.kernelsu.ui.UiMode
+import me.weishu.kernelsu.ui.component.dialog.ManagerHideDialog
 import me.weishu.kernelsu.ui.component.dialog.rememberConfirmDialog
 import me.weishu.kernelsu.ui.navigation3.Navigator
 import me.weishu.kernelsu.ui.navigation3.Route
+import me.weishu.kernelsu.ui.util.ManagerHiding
 import me.weishu.kernelsu.ui.viewmodel.KpmViewModel
 import me.weishu.kernelsu.ui.viewmodel.SettingsViewModel
 
@@ -29,15 +31,24 @@ fun SettingPager(
     isCurrentPage: Boolean = true,
 ) {
     val viewModel = viewModel<SettingsViewModel>()
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val settingsState by viewModel.uiState.collectAsStateWithLifecycle()
+    val managerHideState by ManagerHiding.state.collectAsStateWithLifecycle()
+    val uiState = settingsState.copy(
+        managerHideSupported = managerHideState.supported,
+        isManagerHidden = managerHideState.hidden,
+        managerHideBusy = managerHideState.busy,
+        managerHideError = managerHideState.error,
+    )
     val systemViewModel = viewModel<KpmViewModel>(viewModelStoreOwner = ksuApp)
     val systemState by systemViewModel.uiState.collectAsStateWithLifecycle()
     val latestIsCurrentPage by rememberUpdatedState(isCurrentPage)
     val initialResumeHandled = rememberSaveable { mutableStateOf(false) }
+    var showManagerHideDialog by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(isCurrentPage) {
         if (isCurrentPage) {
             viewModel.refresh()
+            ManagerHiding.refresh()
             systemViewModel.refresh(includeSusfs = true, verifyIntegration = true)
         }
     }
@@ -45,6 +56,7 @@ fun SettingPager(
     LifecycleResumeEffect(Unit) {
         if (initialResumeHandled.value && latestIsCurrentPage) {
             viewModel.refresh()
+            ManagerHiding.refresh()
             systemViewModel.refresh(includeSusfs = true, verifyIntegration = true)
         }
         initialResumeHandled.value = true
@@ -60,6 +72,17 @@ fun SettingPager(
     })
     val integrationTitle = stringResource(R.string.kpm_integration)
 
+    ManagerHideDialog(
+        show = showManagerHideDialog,
+        onDismiss = { showManagerHideDialog = false },
+        onConfirm = { displayName, iconUri ->
+            showManagerHideDialog = false
+            if (ManagerHiding.checkSupport()) {
+                ManagerHiding.setHidden(true, displayName = displayName, iconUri = iconUri)
+            }
+        },
+    )
+
     val actions = SettingsScreenActions(
         onSetCheckUpdate = viewModel::setCheckUpdate,
         onSetCheckModuleUpdate = viewModel::setCheckModuleUpdate,
@@ -72,6 +95,15 @@ fun SettingPager(
         onSetKernelUmountEnabled = viewModel::setKernelUmountEnabled,
         onSetSelinuxHideEnabled = viewModel::setSelinuxHideEnabled,
         onSetAvcSpoofEnabled = viewModel::setAvcSpoofEnabled,
+        onSetManagerHidden = { enabled ->
+            if (enabled) {
+                if (!managerHideState.busy && ManagerHiding.checkSupport()) {
+                    showManagerHideDialog = true
+                }
+            } else {
+                ManagerHiding.setHidden(false)
+            }
+        },
         onSetSulogEnabled = viewModel::setSulogEnabled,
         onSetAdbRootEnabled = viewModel::setAdbRootEnabled,
         onSetShellSuAdbOnlyEnabled = viewModel::setShellSuAdbOnlyEnabled,

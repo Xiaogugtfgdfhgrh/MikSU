@@ -59,6 +59,7 @@ object CoreManagerUpdater {
             val prepared = withContext(Dispatchers.IO) {
                 prepare(app, release, onProgress)
             }
+            val installFile = if (ManagerHiding.isHidden) ManagerHiding.repackageUpdate(prepared.first) else prepared.first
             withContext(Dispatchers.Main) {
                 onProgress(100)
                 if (!app.packageManager.canRequestPackageInstalls()) {
@@ -72,7 +73,7 @@ object CoreManagerUpdater {
                         validateSaved(app, prepared.first, release, prepared.second)
                     }
                     val uri = FileProvider.getUriForFile(
-                        app, "${app.packageName}.fileprovider", prepared.first,
+                        app, "${app.packageName}.fileprovider", installFile,
                     )
                     app.startActivity(Intent(Intent.ACTION_VIEW).apply {
                         setDataAndType(uri, APK_TYPE)
@@ -163,6 +164,10 @@ object CoreManagerUpdater {
         if (file.canonicalFile != file.absoluteFile) throw IOException("The update file is not private")
         val coroutine = currentCoroutineContext()
         val hash = CoreManagerUpdatePolicy.verifyFile(file, release, pinnedHash, coroutine::ensureActive)
+        if (ManagerHiding.isHidden) {
+            ManagerHiding.validateOfficialUpdate(file, release)
+            return CoreManagerUpdatePolicy.verifyFile(file, release, hash, coroutine::ensureActive)
+        }
         val current = identity(installed(context))
         val archive = context.packageManager.getPackageArchiveInfo(
             file.absolutePath, PackageManager.GET_SIGNING_CERTIFICATES,

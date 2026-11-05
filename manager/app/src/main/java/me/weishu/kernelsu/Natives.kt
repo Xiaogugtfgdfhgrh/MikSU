@@ -53,6 +53,11 @@ object Natives {
     val isManager: Boolean
         external get
 
+    val isManagerHideSupported: Boolean
+        external get
+
+    external fun verifyManagerAccess(): Boolean
+
     val isPrBuild: Boolean
         external get
 

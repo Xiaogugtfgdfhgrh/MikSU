@@ -77,6 +77,18 @@ Java_me_weishu_kernelsu_Natives_isManager(JNIEnv *env, jclass clazz) {
 
 extern "C"
 JNIEXPORT jboolean JNICALL
+Java_me_weishu_kernelsu_Natives_isManagerHideSupported(JNIEnv *, jclass) {
+    return is_manager_hide_supported();
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_me_weishu_kernelsu_Natives_verifyManagerAccess(JNIEnv *, jclass) {
+    return verify_manager_access();
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
 Java_me_weishu_kernelsu_Natives_isPrBuild(JNIEnv *env, jclass clazz) {
     return is_pr_build();
 }

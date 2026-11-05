@@ -20,7 +20,7 @@ class MainActivityViewModel(
 
     private val prefs = ksuApp.getSharedPreferences("settings", Context.MODE_PRIVATE)
     private val settingRepo: SettingsRepository = SettingsRepositoryImpl()
-    private val mainPageState = MainPageState(savedStateHandle)
+    private val mainPageState = MainPageState(savedStateHandle, prefs)
     private val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == null || key in observedKeys) {
             _uiState.value = readUiState()
@@ -82,15 +82,20 @@ private const val SELECTED_MAIN_TAB_KEY = "selected_main_tab"
 
 private class MainPageState(
     private val savedStateHandle: SavedStateHandle,
+    private val preferences: SharedPreferences,
 ) {
     private val page = MutableStateFlow(
-        MainTab.restore(savedStateHandle[SELECTED_MAIN_TAB_KEY], savedStateHandle[SELECTED_MAIN_PAGE_KEY]).ordinal
+        MainTab.restore(
+            savedStateHandle[SELECTED_MAIN_TAB_KEY] ?: preferences.getString(SELECTED_MAIN_TAB_KEY, null),
+            savedStateHandle[SELECTED_MAIN_PAGE_KEY],
+        ).ordinal
     )
     val selectedPage: StateFlow<Int> = page.asStateFlow()
 
     fun updateSelectedPage(page: Int) {
         val tab = MainTab.entries[MainPagerConfig.coercePage(page)]
         savedStateHandle[SELECTED_MAIN_TAB_KEY] = tab.name
+        preferences.edit().putString(SELECTED_MAIN_TAB_KEY, tab.name).apply()
         this.page.value = tab.ordinal
     }
 }

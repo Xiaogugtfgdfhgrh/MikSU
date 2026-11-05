@@ -979,6 +979,7 @@ pub fn set_enabled(enabled: bool) -> Result<Value> {
         cfg!(target_arch = "aarch64"),
         "KPM integration requires ARM64"
     );
+    image_transaction::recover_pending()?;
     crate::storage::prepare_kpm()?;
     let directory = Path::new(INTEGRATION_DIR);
     image_transaction::secure_dir(directory)?;

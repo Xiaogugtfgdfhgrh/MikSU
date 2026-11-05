@@ -677,11 +677,11 @@ fn execute(command: KpmCommand) -> Result<Value> {
         return status(runtime_only);
     }
     require_root()?;
-    #[cfg(target_os = "android")]
-    crate::storage::prepare_kpm()?;
     if let KpmCommand::Integration { action } = command {
         return crate::kpm_image::set_enabled(action.enabled());
     }
+    #[cfg(target_os = "android")]
+    crate::storage::prepare_kpm()?;
     let mut backend = Backend::open(Path::new(STATE_ROOT), &NativeEngine, boot_id()?)?;
     match command {
         KpmCommand::List => backend.list(),
