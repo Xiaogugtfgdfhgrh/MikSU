@@ -39,6 +39,16 @@ class HomeKernelUpdateTest {
         assertFalse(state.copy(bundledKernelVersionCode = 32801, isLkmBundled = false).showLkmUpdate)
     }
 
+    @Test fun release023Reuses32802KernelWithoutAnInstallationPrompt() {
+        val upgradedManager = state.copy(
+            ksuVersion = 32802,
+            currentManagerVersionCode = 32803,
+            bundledKernelVersionCode = 32802,
+        )
+        assertFalse(upgradedManager.showLkmUpdate)
+        assertTrue(upgradedManager.copy(ksuVersion = 32801).showLkmUpdate)
+    }
+
     @Test fun managerUpdatesUseTheirCodeWithoutRequestingANewRootImage() {
         val offered = state.copy(
             currentManagerVersionCode = 32800,

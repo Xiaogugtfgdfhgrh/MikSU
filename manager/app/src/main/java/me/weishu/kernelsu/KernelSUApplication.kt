@@ -47,7 +47,11 @@ class KernelSUApplication : Application(), ViewModelStoreOwner {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             val enable = SettingsRepositoryImpl().enablePredictiveBack
-            HiddenApiBypass.addHiddenApiExemptions("Landroid/content/pm/ApplicationInfo;->setEnableOnBackInvokedCallback")
+            runCatching {
+                HiddenApiBypass.addHiddenApiExemptions("Landroid/content/pm/ApplicationInfo;->setEnableOnBackInvokedCallback")
+            }.onFailure {
+                android.util.Log.w("MilkSU", "Predictive back configuration is unavailable", it)
+            }
             setEnableOnBackInvokedCallback(applicationInfo, enable)
         }
 

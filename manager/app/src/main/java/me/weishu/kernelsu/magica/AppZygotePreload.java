@@ -16,6 +16,13 @@ public class AppZygotePreload implements ZygotePreload {
     @Override
     public void doPreload(@NonNull ApplicationInfo appInfo) {
         File f = new File(appInfo.nativeLibraryDir, "libksud.so");
+        // The daemon is staged per ABI. When this APK has no daemon for the
+        // device ABI, forking would exec a path that does not exist and the app
+        // zygote would keep a broken child around.
+        if (!f.isFile()) {
+            Log.w(TAG, "no ksud daemon for this ABI: " + f.getAbsolutePath());
+            return;
+        }
         try {
             System.loadLibrary("kernelsu");
             Log.d(TAG, "executing magica ...");

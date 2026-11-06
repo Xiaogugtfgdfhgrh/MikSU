@@ -2,7 +2,6 @@ package me.weishu.kernelsu.ui.viewmodel
 
 import android.content.Context
 import android.net.Uri
-import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -53,13 +52,18 @@ class KpmViewModel : ViewModel() {
         if (integrationVerificationJob?.isActive == true) return
         integrationVerificationJob = viewModelScope.launch {
             val report = withContext(Dispatchers.IO) {
-                val eligible = "arm64-v8a" in Build.SUPPORTED_ABIS &&
-                    runCatching {
-                        Natives.isManager && Natives.kernelUAPIVersion == Natives.managerUAPIVersion
-                    }.getOrDefault(false)
+                val eligible = runCatching {
+                    Natives.isManager && Natives.kernelUAPIVersion == Natives.managerUAPIVersion
+                }.getOrDefault(false)
                 if (eligible) SystemBackends.kpm.verifyIntegration(SystemBackends.integrationVerifier) else null
             }
             report?.let { checked ->
+                if (checked.status != null && SystemBackends.kpm.isCurrentVerification(checked) &&
+                    _uiState.value.status?.sameIntegrationState(checked.status) == false
+                ) {
+                    // Full verification may recover a missing integration record.
+                    refresh().join()
+                }
                 _uiState.update {
                     if (!it.busy && SystemBackends.kpm.isCurrentVerification(checked)) {
                         it.mergeIntegrationVerification(checked)
@@ -291,7 +295,6 @@ class KpmViewModel : ViewModel() {
             try {
                 val (unavailable, canPatchBoot, safeMode) = withContext(Dispatchers.IO) {
                     val reason = when {
-                        "arm64-v8a" !in Build.SUPPORTED_ABIS -> "ARM64 is required"
                         !runCatching { Natives.isManager }.getOrDefault(false) -> "MilkSU manager authentication is unavailable"
                         !runCatching { Natives.kernelUAPIVersion == Natives.managerUAPIVersion }.getOrDefault(false) ->
                             "Matching kernel UAPI is required"

@@ -11,6 +11,23 @@ use std::process::Command;
 
 use crate::image_transaction;
 
+// KPM patches the kernel in boot, never the ramdisk in init_boot/vendor_boot.
+#[cfg(target_os = "android")]
+fn kernel_partition_path() -> Result<PathBuf> {
+    let slot = crate::boot_patch::get_slot_suffix(false);
+    ensure!(
+        matches!(slot.as_str(), "" | "_a" | "_b"),
+        "invalid slot suffix"
+    );
+    for directory in ["/dev/block/by-name", "/dev/block/bootdevice/by-name"] {
+        let candidate = Path::new(directory).join(format!("boot{slot}"));
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    anyhow::bail!("Cannot locate the active boot{slot} partition")
+}
+
 #[derive(clap::Subcommand, Debug)]
 pub enum ImageCommand {
     /// Report the image header, kernel and ramdisk hashes
@@ -61,9 +78,9 @@ fn parse_boot(bytes: &[u8]) -> Result<BootImage<'_>> {
     ensure!(
         matches!(
             boot.get_header().get_version(),
-            BootImageVersion::Android(3 | 4)
+            BootImageVersion::Android(0..=4)
         ),
-        "only boot headers v3/v4 are supported"
+        "unsupported Android boot header version"
     );
     ensure!(
         boot.get_blocks().get_kernel().is_some(),
@@ -640,7 +657,7 @@ fn apply_runtime_configuration_status(
 ) {
     let enabled = state.is_some_and(|state| state.enabled);
     let can_enable = arm64 && bundled_engine.is_ok() && (state.is_some() || !active);
-    let can_disable = state.is_some();
+    let can_disable = arm64 && state.is_some();
     let configuration_error = bundled_engine
         .as_ref()
         .err()
@@ -790,8 +807,7 @@ pub fn transition_status(active: bool) -> Result<Value> {
             .context("KPM disable requires a verified MilkSU restoration record")?;
         let slot = crate::boot_patch::get_slot_suffix(false);
         let kmi = crate::boot_patch::get_current_kmi()?;
-        let source =
-            image_transaction::read_image(Path::new(&format!("/dev/block/by-name/boot{slot}")))?;
+        let source = image_transaction::read_image(&kernel_partition_path()?)?;
         verified_original(state, &source, Path::new(INTEGRATION_DIR), &slot, &kmi)?;
         Ok(())
     })();
@@ -865,8 +881,7 @@ fn configuration_engine(state: Option<&IntegrationState>, active: bool) -> Resul
     let digest = sha256::digest(crate::assets::get_asset_data("kpimg")?.as_ref());
     let slot = crate::boot_patch::get_slot_suffix(false);
     let kmi = crate::boot_patch::get_current_kmi()?;
-    let source =
-        image_transaction::read_image(Path::new(&format!("/dev/block/by-name/boot{slot}")))?;
+    let source = image_transaction::read_image(&kernel_partition_path()?)?;
     let baseline = if let Some(state) = state {
         let original = verified_original(state, &source, Path::new(INTEGRATION_DIR), &slot, &kmi)?;
         decoded_kernel(&replace_kernel(&source, original, true)?)?
@@ -924,8 +939,7 @@ fn embedded_tool(name: &str, executable: bool) -> Result<PathBuf> {
 fn recover_running_integration() -> Result<IntegrationState> {
     let _image_lock = image_transaction::operation_lock(Path::new(INTEGRATION_DIR))?;
     let slot = crate::boot_patch::get_slot_suffix(false);
-    let source =
-        image_transaction::read_image(Path::new(&format!("/dev/block/by-name/boot{slot}")))?;
+    let source = image_transaction::read_image(&kernel_partition_path()?)?;
     let kernel = raw_kernel(&source)?;
     let decoded = decoded_kernel(&source)?;
     let tool = embedded_tool("kptools", true)?;
@@ -977,7 +991,7 @@ pub fn set_enabled(enabled: bool) -> Result<Value> {
     );
     ensure!(
         cfg!(target_arch = "aarch64"),
-        "KPM integration requires ARM64"
+        "KPM engine installation requires an ARM64 kernel image"
     );
     image_transaction::recover_pending()?;
     crate::storage::prepare_kpm()?;
@@ -996,7 +1010,7 @@ pub fn set_enabled(enabled: bool) -> Result<Value> {
         "invalid slot suffix"
     );
     let kmi = crate::boot_patch::get_current_kmi()?;
-    let target = PathBuf::from(format!("/dev/block/by-name/boot{slot}"));
+    let target = kernel_partition_path()?;
     let source = image_transaction::read_image(&target)?;
     let kernel = raw_kernel(&source)?;
     let current_sha256 = sha256::digest(&kernel);
@@ -1145,6 +1159,40 @@ mod tests {
         image[20..24].copy_from_slice(&1584_u32.to_le_bytes());
         image[40..44].copy_from_slice(&4_u32.to_le_bytes());
         assert!(parse_boot(&image).is_err());
+    }
+
+    #[test]
+    fn legacy_boot_headers_preserve_kernel_and_ramdisk_on_round_trip() {
+        for version in 0_u32..=2 {
+            let mut image = vec![0; 12_288];
+            image[..8].copy_from_slice(b"ANDROID!");
+            image[8..12].copy_from_slice(&64_u32.to_le_bytes());
+            image[16..20].copy_from_slice(&16_u32.to_le_bytes());
+            image[36..40].copy_from_slice(&4096_u32.to_le_bytes());
+            image[40..44].copy_from_slice(&version.to_le_bytes());
+            let header_size = if version == 1 { 1648_u32 } else { 1660_u32 };
+            if version > 0 {
+                image[1644..1648].copy_from_slice(&header_size.to_le_bytes());
+            }
+            image[4096 + 0x38..4096 + 0x3c].copy_from_slice(b"ARM\x64");
+            image[8192..8208].copy_from_slice(b"ramdisk-preserve");
+            let original = raw_kernel(&image).unwrap();
+            let mut replacement = original.clone();
+            replacement[0] = 0x55;
+            let patched = replace_kernel(&image, replacement.clone(), true).unwrap();
+            assert_eq!(raw_kernel(&patched).unwrap(), replacement);
+            let restored = replace_kernel(&patched, original.clone(), true).unwrap();
+            assert_eq!(raw_kernel(&restored).unwrap(), original);
+            assert_eq!(
+                parse_boot(&restored)
+                    .unwrap()
+                    .get_blocks()
+                    .get_ramdisk()
+                    .unwrap()
+                    .get_data(),
+                b"ramdisk-preserve"
+            );
+        }
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 import com.google.protobuf.gradle.id
 import com.android.build.api.variant.HostTestBuilder
+import java.io.File
 import java.net.URI
 
 plugins {
@@ -44,6 +45,24 @@ apksign {
     storePasswordProperty = "KEYSTORE_PASSWORD"
     keyAliasProperty = "KEY_ALIAS"
     keyPasswordProperty = "KEY_PASSWORD"
+}
+
+fun managerAbis(): List<String> {
+    val known = listOf("arm64-v8a", "x86_64")
+    val jniLibs = layout.projectDirectory.dir("src/main/jniLibs").asFile
+    val staged = known.filter { File(jniLibs, "$it/libksud.so").isFile }
+    val configured = providers.gradleProperty("MILKSU_ABIS")
+        .orElse(providers.environmentVariable("MILKSU_ABIS"))
+        .orNull
+    val requested = configured?.split(Regex("[,\\s]+"))?.filter(String::isNotBlank)?.distinct()
+        ?: staged.ifEmpty { known }
+    require(requested.isNotEmpty() && requested.all { it in known }) {
+        "MILKSU_ABIS must contain supported daemon ABIs: ${known.joinToString()}"
+    }
+    require(requested.all { it in staged }) {
+        "Build and stage libksud.so for each requested ABI before Manager: ${requested.filterNot { it in staged }}"
+    }
+    return requested
 }
 
 protobuf {
@@ -174,7 +193,7 @@ android {
         }
 
         ndk {
-            abiFilters += listOf("arm64-v8a")
+            abiFilters += managerAbis()
         }
     }
 

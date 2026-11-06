@@ -82,7 +82,8 @@ class KpmRepository(private val executor: CommandExecutor) {
         mutex.withLock {
             if (revision != integrationRevision.get() ||
                 completedAt - startedAt !in 0L until KPM_VERIFICATION_TTL_NANOS ||
-                (report.status != null && latestStatus?.sameIntegrationState(report.status) == false)
+                (report.status != null && latestStatus?.stateKnown == true &&
+                    latestStatus?.sameIntegrationState(report.status) == false)
             ) {
                 null
             } else {

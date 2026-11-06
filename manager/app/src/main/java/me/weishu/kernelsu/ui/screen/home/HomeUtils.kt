@@ -3,6 +3,7 @@ package me.weishu.kernelsu.ui.screen.home
 import android.content.Context
 import androidx.compose.runtime.Immutable
 import androidx.core.content.pm.PackageInfoCompat
+import me.weishu.kernelsu.BuildConfig
 
 @Immutable
 data class ManagerVersion(
@@ -21,10 +22,9 @@ data class SystemInfo(
 )
 
 fun getManagerVersion(context: Context): ManagerVersion {
-    val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)!!
-    val versionCode = PackageInfoCompat.getLongVersionCode(packageInfo)
+    val packageInfo = runCatching { context.packageManager.getPackageInfo(context.packageName, 0) }.getOrNull()
     return ManagerVersion(
-        versionName = packageInfo.versionName!!,
-        versionCode = versionCode
+        versionName = packageInfo?.versionName?.takeIf { it.isNotBlank() } ?: BuildConfig.VERSION_NAME,
+        versionCode = packageInfo?.let(PackageInfoCompat::getLongVersionCode) ?: BuildConfig.VERSION_CODE.toLong(),
     )
 }

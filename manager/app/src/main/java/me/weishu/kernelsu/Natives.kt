@@ -1,6 +1,7 @@
 package me.weishu.kernelsu
 
 import android.os.Parcelable
+import android.os.Build
 import androidx.annotation.Keep
 import androidx.compose.runtime.Immutable
 import kotlinx.parcelize.Parcelize
@@ -31,45 +32,62 @@ object Natives {
     const val ROOT_UID = 0
     const val ROOT_GID = 0
 
-    init {
+    val loadError: LinkageError? = try {
         System.loadLibrary("kernelsu")
+        null
+    } catch (error: LinkageError) {
+        runCatching {
+            android.util.Log.e("MilkSU", "Native bridge unavailable: ${Build.SUPPORTED_ABIS?.joinToString()}", error)
+        }
+        error
     }
 
+    val isLoaded: Boolean
+        get() = loadError == null
+
+    private inline fun <T> nativeOr(fallback: T, block: () -> T): T =
+        try {
+            if (loadError != null) fallback else block()
+        } catch (_: LinkageError) {
+            fallback
+        }
+
     val version: Int
-        external get
+        get() = nativeOr(0) { NativeBridge.version }
 
     val isSafeMode: Boolean
-        external get
+        get() = nativeOr(false) { NativeBridge.isSafeMode }
 
     val isLkmMode: Boolean
-        external get
+        get() = nativeOr(false) { NativeBridge.isLkmMode }
 
     val isLkmBundled: Boolean
-        external get
+        get() = nativeOr(false) { NativeBridge.isLkmBundled }
 
     val isLateLoadMode: Boolean
-        external get
+        get() = nativeOr(false) { NativeBridge.isLateLoadMode }
 
     val isManager: Boolean
-        external get
+        get() = nativeOr(false) { NativeBridge.isManager }
 
     val isManagerHideSupported: Boolean
-        external get
+        get() = nativeOr(false) { NativeBridge.isManagerHideSupported }
 
-    external fun verifyManagerAccess(): Boolean
+    fun verifyManagerAccess(): Boolean = nativeOr(false) { NativeBridge.verifyManagerAccess() }
 
     val isPrBuild: Boolean
-        external get
+        get() = nativeOr(false) { NativeBridge.isPrBuild }
 
-    external fun uidShouldUmount(uid: Int): Boolean
+    fun uidShouldUmount(uid: Int): Boolean = nativeOr(true) { NativeBridge.uidShouldUmount(uid) }
 
     /**
      * Get the profile of the given package.
      * @param key usually the package name
      * @return return null if failed.
      */
-    external fun getAppProfile(key: String?, uid: Int): Profile
-    external fun setAppProfile(profile: Profile?): Boolean
+    fun getAppProfile(key: String?, uid: Int): Profile =
+        nativeOr(Profile(key.orEmpty(), uid)) { NativeBridge.getAppProfile(key, uid) }
+    fun setAppProfile(profile: Profile?): Boolean = nativeOr(false) { NativeBridge.setAppProfile(profile) }
 
     /**
      * `su` compat mode can be disabled temporarily.
@@ -77,8 +95,8 @@ object Natives {
      *  1: enabled
      *  negative : error
      */
-    external fun isSuEnabled(): Boolean
-    external fun setSuEnabled(enabled: Boolean): Boolean
+    fun isSuEnabled(): Boolean = nativeOr(false) { NativeBridge.isSuEnabled() }
+    fun setSuEnabled(enabled: Boolean): Boolean = nativeOr(false) { NativeBridge.setSuEnabled(enabled) }
 
     /**
      * Kernel module umount can be disabled temporarily.
@@ -86,8 +104,9 @@ object Natives {
      *  1: enabled
      *  negative : error
      */
-    external fun isKernelUmountEnabled(): Boolean
-    external fun setKernelUmountEnabled(enabled: Boolean): Boolean
+    fun isKernelUmountEnabled(): Boolean = nativeOr(false) { NativeBridge.isKernelUmountEnabled() }
+    fun setKernelUmountEnabled(enabled: Boolean): Boolean =
+        nativeOr(false) { NativeBridge.setKernelUmountEnabled(enabled) }
 
     /**
      * SELinux hide can be disabled temporarily.
@@ -95,15 +114,15 @@ object Natives {
      *  1: enabled
      *  negative : error
      */
-    external fun isSelinuxHideEnabled(): Boolean
-    external fun setSelinuxHideEnabled(enabled: Boolean): Int
+    fun isSelinuxHideEnabled(): Boolean = nativeOr(false) { NativeBridge.isSelinuxHideEnabled() }
+    fun setSelinuxHideEnabled(enabled: Boolean): Int = nativeOr(-19) { NativeBridge.setSelinuxHideEnabled(enabled) }
 
     /**
      * Get the user name for the uid.
      */
-    external fun getUserName(uid: Int): String?
+    fun getUserName(uid: Int): String? = nativeOr<String?>(null) { NativeBridge.getUserName(uid) }
 
-    external fun getSuperuserCount(): Int
+    fun getSuperuserCount(): Int = nativeOr(0) { NativeBridge.getSuperuserCount() }
 
     private const val NON_ROOT_DEFAULT_PROFILE_KEY = "$"
     private const val NOBODY_UID = 9999
@@ -126,10 +145,10 @@ object Natives {
     }
 
     val kernelUAPIVersion: Int
-        external get
+        get() = nativeOr(0) { NativeBridge.kernelUAPIVersion }
 
     val managerUAPIVersion: Int
-        external get
+        get() = nativeOr(0) { NativeBridge.managerUAPIVersion }
 
     fun isFullFeatured(): Boolean {
         return isManager && kernelUAPIVersion == managerUAPIVersion && rootAvailable()

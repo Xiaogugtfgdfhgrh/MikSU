@@ -16,12 +16,23 @@
 #include <climits>
 #include <sys/syscall.h>
 #include <cerrno>
+#include <mutex>
 #include "ksu.h"
 
 static int fd = -1;
+static std::mutex driver_mutex;
+
+static bool is_driver_fd(int candidate) {
+    if (candidate < 0) return false;
+    char path[64], target[64];
+    snprintf(path, sizeof(path), "/proc/self/fd/%d", candidate);
+    const auto size = readlink(path, target, sizeof(target) - 1);
+    if (size < 0) return false;
+    target[size] = '\0';
+    return strcmp(target, "anon_inode:[ksu_driver]") == 0;
+}
 
 static inline int scan_driver_fd() {
-    const char *kName = "[ksu_driver]";
     DIR *dir = opendir("/proc/self/fd");
     if (!dir) {
         return -1;
@@ -29,9 +40,6 @@ static inline int scan_driver_fd() {
 
     int found = -1;
     struct dirent *de;
-    char path[64];
-    char target[PATH_MAX];
-
     while ((de = readdir(dir)) != NULL) {
         if (de->d_name[0] == '.') {
             continue;
@@ -43,17 +51,7 @@ static inline int scan_driver_fd() {
             continue;
         }
 
-        snprintf(path, sizeof(path), "/proc/self/fd/%s", de->d_name);
-        ssize_t n = readlink(path, target, sizeof(target) - 1);
-        if (n < 0) {
-            continue;
-        }
-        target[n] = '\0';
-
-        const char *base = strrchr(target, '/');
-        base = base ? base + 1 : target;
-
-        if (strstr(base, kName)) {
+        if (is_driver_fd(static_cast<int>(fd_long))) {
             found = (int)fd_long;
             break;
         }
@@ -65,8 +63,8 @@ static inline int scan_driver_fd() {
 
 template<typename... Args>
 static int ksuctl(unsigned long op, Args &&... args) {
-
-    if (fd < 0) {
+    std::lock_guard<std::mutex> lock(driver_mutex);
+    if (!is_driver_fd(fd)) {
         fd = scan_driver_fd();
     }
 
@@ -75,16 +73,13 @@ static int ksuctl(unsigned long op, Args &&... args) {
     return ioctl(fd, op, std::forward<Args>(args)...);
 }
 
-static struct ksu_get_info_cmd g_version {};
-
 struct ksu_get_info_cmd get_info() {
-    if (!g_version.version) {
-        if (ksuctl(KSU_IOCTL_GET_INFO, &g_version) < 0) {
-            ksuctl(KSU_IOCTL_GET_INFO_LEGACY, &g_version);
-            g_version.uapi_version = 0;
-        }
-    }
-    return g_version;
+    struct ksu_get_info_cmd info{};
+    if (ksuctl(KSU_IOCTL_GET_INFO, &info) == 0) return info;
+    info = {};
+    ksuctl(KSU_IOCTL_GET_INFO_LEGACY, &info);
+    info.uapi_version = 0;
+    return info;
 }
 
 uint32_t get_kernel_uapi_version() {

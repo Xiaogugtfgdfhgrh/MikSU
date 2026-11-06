@@ -224,7 +224,7 @@ fn status_value(
             .and_then(Value::as_bool)
             .unwrap_or(false);
     let reason = if !arm64_android {
-        Some("KPM requires Android ARM64")
+        Some("The bundled KPM engine requires an ARM64 kernel")
     } else if !root {
         Some("Root access is required to probe the KPM engine")
     } else if let Some(reason) = transition.get("reason").and_then(Value::as_str) {

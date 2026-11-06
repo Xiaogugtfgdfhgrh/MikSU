@@ -51,14 +51,22 @@ data class FlashResult(val code: Int, val err: String, val showReboot: Boolean) 
 }
 
 object KsuCli {
-    val SHELL: Shell = createRootShell()
-    val GLOBAL_MNT_SHELL: Shell = createRootShell(true)
+    private fun cache(globalMnt: Boolean) = RootShellCache(
+        create = { createRootShell(globalMnt) },
+        alive = Shell::isAlive,
+        root = Shell::isRoot,
+        close = Shell::close,
+        now = SystemClock::elapsedRealtime,
+    )
+    private val shell = cache(false)
+    private val globalMntShell = cache(true)
+
+    val SHELL: Shell get() = shell.get()
+    val GLOBAL_MNT_SHELL: Shell get() = globalMntShell.get()
 }
 
 fun getRootShell(globalMnt: Boolean = false): Shell {
-    return if (globalMnt) KsuCli.GLOBAL_MNT_SHELL else {
-        KsuCli.SHELL
-    }
+    return if (globalMnt) KsuCli.GLOBAL_MNT_SHELL else KsuCli.SHELL
 }
 
 inline fun <T> withNewRootShell(

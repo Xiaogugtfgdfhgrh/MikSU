@@ -19,6 +19,35 @@ class KpmIntegrationVerificationTest {
 
     private fun emptyRepository() = KpmRepository { error("Verification must not use the module executor") }
 
+    @Test fun recoveredIntegrationIsAcceptedAfterAnUnknownRuntimeSnapshot() = runBlocking {
+        var recovered = false
+        val repository = KpmRepository { args ->
+            if (args[1] == "status") {
+                ok(if (recovered) status(verified = false) else
+                    """{"supported":true,"configured_enabled":false,"active":true,"reboot_required":false,"state_known":false,"integration_verified":false}""")
+            } else ok("[]")
+        }
+        val initial = repository.refresh()
+        val cold = KpmUiState(canPatchBoot = true).merge(initial)
+        assertFalse(cold.canChangeIntegration)
+        val checked = repository.verifyIntegration(CommandExecutor {
+            assertEquals(listOf("kpm", "status"), it)
+            recovered = true
+            ok(status())
+        })
+        assertNotNull(checked)
+        assertNull(checked!!.error)
+        val fresh = cold.merge(repository.refresh()).mergeIntegrationVerification(checked)
+        assertTrue(fresh.status!!.stateKnown)
+        assertTrue(fresh.canSetIntegration(false))
+    }
+
+    @Test fun runtimeOnlyReplyCannotMasqueradeAsVerifiedIntegration() = runBlocking {
+        val report = emptyRepository().verifyIntegration(CommandExecutor { ok(status(verified = false)) })
+        assertEquals("unverified_integration", report!!.error?.code)
+        assertNull(report.status)
+    }
+
     @Test fun startupAndSettingsShareOneSuccessfulVerification() = runBlocking {
         var queries = 0
         val verifier = CommandExecutor {
