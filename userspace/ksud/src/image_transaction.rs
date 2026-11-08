@@ -327,6 +327,7 @@ fn install_with_operations(
 ) -> Result<Receipt> {
     ensure!(!images.is_empty(), "no images to install");
     secure_dir(directory)?;
+    let directory = &directory.canonicalize()?;
     let _lock = operation_lock(directory)?;
     let pending = pending_path(directory);
     #[cfg(target_os = "android")]
@@ -944,7 +945,7 @@ pub fn recover_pending() -> Result<()> {
         let _lock = operation_lock(root)?;
         reconcile_pending(&pending, |path, journal| {
             ensure!(
-                path.starts_with(root),
+                path.starts_with(root.canonicalize()?),
                 "recovery journal is outside its storage root"
             );
             ensure!(
@@ -971,7 +972,7 @@ pub fn recover_pending() -> Result<()> {
                     "recovery target is not an active-slot boot partition"
                 );
             }
-            let allowed_state = Path::new(root).join("kpm/integration").join(format!(
+            let allowed_state = root.canonicalize()?.join("kpm/integration").join(format!(
                 "state{}.json",
                 if slot.is_empty() { "_single" } else { &slot }
             ));
@@ -1399,6 +1400,45 @@ mod tests {
         );
         assert!(result.is_err());
         assert_eq!(fs::read(target).unwrap(), b"another-install");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn working_directory_alias_uses_canonical_journal_and_keeps_rollback_valid() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = root.path().join("relocated");
+        fs::create_dir(&storage).unwrap();
+        let alias = root.path().join("ksu");
+        std::os::unix::fs::symlink(&storage, &alias).unwrap();
+        let target = root.path().join("boot");
+        fs::write(&target, b"old-image").unwrap();
+        let state = alias.join("MilkSU/kpm/integration/state_b.json");
+        let receipt = install_with_state(
+            "enable-kpm",
+            &[ImageWrite {
+                target: target.clone(),
+                image: b"new-image".to_vec(),
+                expected_sha256: None,
+            }],
+            &[StateWrite {
+                path: state.clone(),
+                contents: b"enabled".to_vec(),
+            }],
+            &alias.join("MilkSU/kpm/integration/transactions_b"),
+        )
+        .unwrap();
+        assert!(receipt.journal.starts_with(&storage));
+        assert_eq!(receipt.journal.canonicalize().unwrap(), receipt.journal);
+        assert_eq!(fs::read(&state).unwrap(), b"enabled");
+        rollback(&receipt).unwrap();
+        assert_eq!(fs::read(target).unwrap(), b"old-image");
+        assert!(!state.exists());
+        assert!(
+            fs::symlink_metadata(alias)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[test]

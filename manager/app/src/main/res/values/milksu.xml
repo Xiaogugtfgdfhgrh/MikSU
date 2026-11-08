@@ -10,7 +10,7 @@
     <string name="settings_manager_hide_restoring">Restoring the original manager...</string>
     <string name="settings_manager_hide_default_name">Settings</string>
     <string name="settings_manager_hide_name">App name</string>
-    <string name="settings_manager_hide_name_invalid">Use 1-40 characters without control or formatting characters.</string>
+    <string name="settings_manager_hide_name_invalid">Use 1-40 characters without control or formatting characters. The name cannot contain su, io, or manager, regardless of case.</string>
     <string name="settings_manager_hide_icon_pick">Choose icon</string>
     <string name="settings_manager_hide_icon_reset">Restore default icon</string>
     <string name="settings_manager_hide_icon_invalid">Unable to open this image. Choose another icon.</string>

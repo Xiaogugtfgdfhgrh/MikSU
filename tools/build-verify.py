@@ -15,6 +15,9 @@ def main() -> None:
     apk = Path(sys.argv[1]).resolve()
     out = Path(os.environ.get("MILKSU_OUT", Path(__file__).resolve().parents[1] / "out"))
     certificate = json.loads((out / "private/certificate.json").read_text())
+    if re.fullmatch(r"(me\.weishu\.kernelsu|com\.rifsxd\.ksunext)(\..*)?",
+                    certificate["KSU_PACKAGE_NAME"]):
+        raise SystemExit("MilkSU must use its own application ID; upstream Manager identities are reserved")
     if os.environ.get("MILKSU_REQUIRE_RELEASE_SIGNING") == "1" and (
             certificate.get("signing_profile") != "release" or
             certificate.get("development_only") is not False):

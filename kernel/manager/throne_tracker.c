@@ -199,17 +199,17 @@ static uid_t search_manager(const char *path, int depth, struct list_head *uid_d
             if (!candidate_path[0])
                 goto skip_iterate;
 
-            // As soon as we get the manager apk path, we can stop
-            stop = 1;
-
             bool is_manager = identity ? ksu_apk_matches_certificate(candidate_path,
                 identity->certificate_size, identity->certificate_sha256) : is_manager_apk(candidate_path);
             pr_info("Found manager base.apk at path: %s, is_manager: %d\n", candidate_path, is_manager);
 
             // Only crown if signature verification pass
-            if (unlikely(!is_manager))
+            if (unlikely(!is_manager)) {
+                candidate_path[0] = 0;
                 goto skip_iterate;
+            }
 
+            stop = 1;
             result = manager_uid(package, uid_data);
             if (!identity && result != KSU_INVALID_APPID)
                 strscpy(cached_manager_apk_path, candidate_path, sizeof(cached_manager_apk_path));

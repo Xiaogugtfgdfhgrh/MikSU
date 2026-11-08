@@ -30,6 +30,9 @@ val isPrBuild = project.findProperty("IS_PR_BUILD")?.toString()?.toBoolean() ?: 
 val defaultManagerPackageName = if (isPrBuild) "io.milksu.manager.pr" else "io.milksu.manager"
 val defaultManagerName = if (isPrBuild) "MilkSU PR" else "MilkSU"
 val managerPackageName = project.findProperty("KSU_PACKAGE_NAME")?.toString() ?: defaultManagerPackageName
+require(!Regex("^(me\\.weishu\\.kernelsu|com\\.rifsxd\\.ksunext)(\\..*)?$").matches(managerPackageName)) {
+    "MilkSU must use its own application ID; upstream Manager identities are reserved."
+}
 val managerName = project.findProperty("KSU_NAME")?.toString() ?: defaultManagerName
 val milkSuUpdateUrl = providers.gradleProperty("MILKSU_UPDATE_URL")
     .orElse(providers.environmentVariable("MILKSU_UPDATE_URL"))
@@ -91,7 +94,7 @@ val baseCFlags = listOf(
 val baseCppFlags = baseCFlags + "-fno-rtti"
 
 android {
-    namespace = "me.weishu.kernelsu"
+    namespace = "io.milksu.manager"
 
     buildTypes {
         debug {

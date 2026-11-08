@@ -252,7 +252,7 @@ fn status_value(
         "active": probe.active,
         "reboot_required": reboot_required,
         "transition_failed": transition.get("transition_failed").and_then(Value::as_bool).unwrap_or(false),
-        "provider": if probe.active && probe.error.is_some() { "unknown" } else if unmanaged { "incompatible" } else if probe.managed() { "milksu" } else { "none" },
+        "provider": if probe.active && probe.error.is_some() { "unknown" } else if probe.upstream { "kpatch-next" } else if unmanaged { "incompatible" } else if probe.managed() { "milksu" } else { "none" },
         "state_known": root && transition.get("state_known").and_then(Value::as_bool).unwrap_or(true),
         "version": probe.version,
         "capabilities": probe.capabilities,

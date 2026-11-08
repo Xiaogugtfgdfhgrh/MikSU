@@ -10,7 +10,7 @@
     <string name="settings_manager_hide_restoring">正在恢复原始管理器...</string>
     <string name="settings_manager_hide_default_name">设置</string>
     <string name="settings_manager_hide_name">应用名称</string>
-    <string name="settings_manager_hide_name_invalid">请输入 1-40 个字符，不含控制字符或格式字符。</string>
+    <string name="settings_manager_hide_name_invalid">请输入 1-40 个字符，不含控制字符或格式字符，也不能包含 su、io、manager，不区分大小写。</string>
     <string name="settings_manager_hide_icon_pick">选择图标</string>
     <string name="settings_manager_hide_icon_reset">恢复默认图标</string>
     <string name="settings_manager_hide_icon_invalid">无法打开此图片，请重新选择图标。</string>

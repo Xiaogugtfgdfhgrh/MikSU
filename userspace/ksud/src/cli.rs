@@ -498,6 +498,9 @@ enum Feature {
         id: String,
         /// Feature value (0=disable, 1=enable)
         value: u64,
+        /// Set and save the value while holding the feature configuration lock
+        #[arg(long)]
+        persist: bool,
     },
 
     /// List all available features
@@ -782,7 +785,13 @@ pub fn run() -> Result<()> {
                     crate::feature::get_feature(&id)
                 }
             }
-            Feature::Set { id, value } => crate::feature::set_feature(&id, value),
+            Feature::Set { id, value, persist } => {
+                if persist {
+                    crate::feature::set_persistent_feature(&id, value)
+                } else {
+                    crate::feature::set_feature(&id, value)
+                }
+            }
             Feature::List => {
                 crate::feature::list_features();
                 Ok(())

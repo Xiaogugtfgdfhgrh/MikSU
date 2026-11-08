@@ -211,6 +211,25 @@ class BuildVerifyTests(TemporaryAssets):
             "native_daemons": {"arm64-v8a": sha(self.daemon)},
         })
 
+    def test_upstream_manager_application_ids_cannot_be_published_as_milksu(self):
+        for package in ("me.weishu.kernelsu", "me.weishu.kernelsu.pr",
+                        "com.rifsxd.ksunext", "com.rifsxd.ksunext.debug"):
+            with self.subTest(package=package):
+                signing = self.read_json("out/private/certificate.json")
+                signing["KSU_PACKAGE_NAME"] = package
+                self.put_json("out/private/certificate.json", signing)
+                with self.assertRaisesRegex(SystemExit, "own application ID"):
+                    self.verify()
+                self.module_run.assert_not_called()
+                self.android_output.assert_not_called()
+                self.assertFalse(self.final_manifest.exists())
+
+    def test_apk_package_must_match_the_kernel_manager_identity(self):
+        self.badging = self.badging.replace("io.milksu.manager", "me.weishu.kernelsu")
+        with self.assertRaisesRegex(SystemExit, "Unexpected APK applicationId"):
+            self.verify()
+        self.assertFalse(self.final_manifest.exists())
+
     def test_partial_matrix_option_still_checks_embedded_assets(self):
         self.environment["MILKSU_REQUIRE_FULL_MATRIX"] = "0"
         self.put("out/" + ASSET_PATHS["kptools"], elf("stale-tool"))

@@ -34,7 +34,7 @@ pub enum ImageCommand {
     Inspect { boot: PathBuf },
     /// Save the original, compressed kernel without modifying its container
     ExportKernel { boot: PathBuf, out: PathBuf },
-    /// Reconstruct a baseline only when repatching exactly matches the input
+    /// Recover the embedded baseline and verify that the bundled engine can patch it
     RecoverKernel {
         #[arg(long)]
         boot: PathBuf,
@@ -278,9 +278,12 @@ fn verify_recovered_kernel(
 ) -> Result<Vec<u8>> {
     validate_baseline(&recovered)?;
     ensure!(
-        repatch(&recovered)? == kernel,
-        "boot kernel does not match the bundled MilkSU engine; refusing to adopt it"
+        recovered.len() <= kernel.len() && recovered[8..] == kernel[8..recovered.len()],
+        "KPatch recovery changed the original kernel body"
     );
+    // KPatch-Next -u restores the saved entry and removes the old payload.
+    // A different engine version or build timestamp must not prevent -p upgrades.
+    repatch(&recovered)?;
     Ok(recovered)
 }
 
@@ -781,8 +784,8 @@ pub fn transition_status(active: bool) -> Result<Value> {
         }
     };
     let mut recovery_error = None;
-    if state.is_none() && active {
-        let recovery = (|| -> Result<IntegrationState> {
+    if state.is_none() {
+        let recovery = (|| -> Result<Option<IntegrationState>> {
             let directory = Path::new(INTEGRATION_DIR);
             image_transaction::secure_dir(directory)?;
             let lock = std::fs::OpenOptions::new()
@@ -792,10 +795,10 @@ pub fn transition_status(active: bool) -> Result<Value> {
                 .truncate(false)
                 .open(directory.join("operation.lock"))?;
             image_transaction::try_lock_file(&lock)?;
-            read_state()?.map_or_else(recover_running_integration, Ok)
+            read_state()?.map_or_else(|| recover_boot_integration(active), |state| Ok(Some(state)))
         })();
         match recovery {
-            Ok(recovered) => state = Some(recovered),
+            Ok(recovered) => state = recovered,
             Err(error) => recovery_error = Some(error),
         }
     }
@@ -936,7 +939,7 @@ fn embedded_tool(name: &str, executable: bool) -> Result<PathBuf> {
 }
 
 #[cfg(target_os = "android")]
-fn recover_running_integration() -> Result<IntegrationState> {
+fn recover_boot_integration(active: bool) -> Result<Option<IntegrationState>> {
     let _image_lock = image_transaction::operation_lock(Path::new(INTEGRATION_DIR))?;
     let slot = crate::boot_patch::get_slot_suffix(false);
     let source = image_transaction::read_image(&kernel_partition_path()?)?;
@@ -953,12 +956,16 @@ fn recover_running_integration() -> Result<IntegrationState> {
             input.path().as_os_str(),
         ],
     )?;
+    if info.lines().any(|line| line.trim() == "patched=false") && !active {
+        return Ok(None);
+    }
     ensure!(
         info.lines().any(|line| line.trim() == "patched=true"),
-        "active KPM engine has no verifiable bundled patch in the boot image"
+        "active KPM engine has no recoverable KPatch image in the boot partition"
     );
     let kpimg = embedded_tool("kpimg", false)?;
     let recovered = recover_kernel_bytes(&decoded, &tool, &kpimg)?;
+    let current_engine = patch_kernel_bytes(&recovered, &tool, &kpimg)? == decoded;
     let original = raw_kernel(&replace_kernel(&source, recovered, false)?)?;
     let original_sha256 = sha256::digest(&original);
     let original_kernel =
@@ -975,11 +982,15 @@ fn recover_running_integration() -> Result<IntegrationState> {
         boot_id: fs::read_to_string("/proc/sys/kernel/random/boot_id")?
             .trim()
             .to_owned(),
-        engine_sha256: sha256::digest(crate::assets::get_asset_data("kpimg")?.as_ref()),
-        reboot_pending: false,
+        engine_sha256: if current_engine {
+            sha256::digest(crate::assets::get_asset_data("kpimg")?.as_ref())
+        } else {
+            String::new()
+        },
+        reboot_pending: !active,
     };
     image_transaction::atomic_write(&state_path()?, &serde_json::to_vec_pretty(&state)?)?;
-    Ok(state)
+    Ok(Some(state))
 }
 
 #[cfg(target_os = "android")]
@@ -1017,7 +1028,7 @@ pub fn set_enabled(enabled: bool) -> Result<Value> {
     let active = crate::kpm::engine_active();
     let runtime_ready = crate::kpm::engine_managed();
     let old_state = match read_state()? {
-        None if active => Some(recover_running_integration()?),
+        None => recover_boot_integration(active)?,
         state => state,
     };
     let boot_id = fs::read_to_string("/proc/sys/kernel/random/boot_id")?
@@ -1657,7 +1668,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_requires_exact_current_bundle_round_trip() {
+    fn recovery_accepts_upstream_or_older_engine_and_verifies_kernel_body() {
         let original = raw_kernel(&test_boot()).unwrap();
         let mut old_patched = original.clone();
         old_patched[0] = 0x11;
@@ -1667,12 +1678,19 @@ mod tests {
         })
         .unwrap();
         assert_eq!(exact, original);
+        let upgraded = verify_recovered_kernel(&old_patched, original.clone(), |baseline| {
+            let mut current = baseline.to_vec();
+            current[0] = 0x22;
+            Ok(current)
+        })
+        .unwrap();
+        assert_eq!(upgraded, original);
+        let mut different_kernel = original.clone();
+        different_kernel[24] ^= 1;
         assert!(
-            verify_recovered_kernel(&old_patched, original.clone(), |baseline| {
-                let mut current = baseline.to_vec();
-                current[0] = 0x22;
-                Ok(current)
-            },)
+            verify_recovered_kernel(&old_patched, different_kernel, |_| {
+                panic!("must reject before patching a different kernel");
+            })
             .is_err()
         );
         assert!(
