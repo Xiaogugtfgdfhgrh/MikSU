@@ -231,7 +231,7 @@ base {
 
 dependencies {
     implementation("com.android.tools.build:apksig:9.4.1")
-    implementation("org.bouncycastle:bcpkix-jdk18on:1.83")
+    implementation("org.bouncycastle:bcpkix-jdk18on:1.86")
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.splashscreen)
 
