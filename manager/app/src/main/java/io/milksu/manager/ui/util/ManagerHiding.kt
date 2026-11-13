@@ -24,6 +24,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import io.milksu.manager.BuildConfig
 import io.milksu.manager.Natives
+import io.milksu.manager.NativeLibraryLoader
 import io.milksu.manager.R
 import io.milksu.manager.data.repository.SettingsRepositoryImpl
 import io.milksu.manager.data.script.ScriptCommand
@@ -33,6 +34,7 @@ import io.milksu.manager.data.system.ManagerApk
 import io.milksu.manager.data.system.ManagerAppearance
 import io.milksu.manager.data.system.ManagerIcon
 import io.milksu.manager.data.system.ManagerManifest
+import io.milksu.manager.data.system.ManagerNativeLibraries
 import io.milksu.manager.data.system.ManagerTransfer
 import io.milksu.manager.ksuApp
 import io.milksu.manager.ui.MainActivity
@@ -511,7 +513,7 @@ object ManagerHiding {
 
     private fun rootOrNull(command: String) = runCatching { root(command) }.getOrNull()
     private fun refreshGlobalIdentity() {
-        root("${quote("${ksuApp.applicationInfo.nativeLibraryDir}/libksud.so")} debug refresh-manager")
+        root("${quote(NativeLibraryLoader.file(ksuApp.applicationInfo, ManagerNativeLibraries.DAEMON).absolutePath)} debug refresh-manager")
     }
     private fun quote(value: String) = ScriptCommand.quote(value)
     private fun hash(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes)

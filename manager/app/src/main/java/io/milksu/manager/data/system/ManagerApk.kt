@@ -25,6 +25,30 @@ import java.util.zip.ZipOutputStream
 object ManagerApk {
     private const val LIMIT = 128L * 1024 * 1024
     private val random = SecureRandom()
+    private val publisherPrefixes = listOf(
+        "amber", "atlas", "birch", "bright", "cedar", "cherry", "clear", "cloud",
+        "coral", "crystal", "dawn", "elm", "fern", "flint", "forest", "green",
+        "hazel", "maple", "meadow", "moon", "oak", "olive", "pine", "river",
+        "silver", "spring", "stone", "teal", "west", "white", "wild", "willow",
+    )
+    private val publisherSuffixes = listOf(
+        "bay", "bridge", "brook", "cliff", "cove", "crest", "dale", "field",
+        "ford", "garden", "gate", "glade", "glen", "grove", "harbor", "haven",
+        "heath", "hill", "isle", "knoll", "leaf", "marsh", "mill", "park",
+        "pond", "ridge", "rock", "shore", "stone", "vale", "wood", "upland",
+    )
+    private val applicationPrefixes = listOf(
+        "clear", "daily", "easy", "fast", "fresh", "handy", "keen", "light",
+        "little", "local", "neat", "nimble", "open", "paper", "plain", "pocket",
+        "quick", "quiet", "ready", "simple", "small", "smart", "soft", "steady",
+        "swift", "tidy", "tiny", "vivid", "warm", "white", "wise", "bright",
+    )
+    private val applicationSuffixes = listOf(
+        "agenda", "album", "board", "book", "cache", "calendar", "clock", "desk",
+        "diary", "drafts", "files", "folder", "journal", "ledger", "lists", "memo",
+        "notes", "pad", "pages", "planner", "reader", "record", "shelf", "sketch",
+        "slate", "stack", "tasks", "timer", "tracker", "wallet", "weather", "widget",
+    )
 
     fun randomPackage(): String = randomPackage(random)
 
@@ -32,14 +56,13 @@ object ManagerApk {
         packageCandidate(random)
     }.first(ManagerAppearance::isHiddenTextAllowed)
 
-    private fun packageCandidate(random: SecureRandom): String = List(3) {
-        buildString {
-            append(('a'.code + random.nextInt(26)).toChar())
-            repeat(7 + random.nextInt(7)) {
-                append("abcdefghijklmnopqrstuvwxyz0123456789"[random.nextInt(36)])
-            }
-        }
-    }.joinToString(".")
+    private fun packageCandidate(random: SecureRandom): String {
+        val publisher = publisherPrefixes[random.nextInt(publisherPrefixes.size)] +
+            publisherSuffixes[random.nextInt(publisherSuffixes.size)]
+        val application = applicationPrefixes[random.nextInt(applicationPrefixes.size)] +
+            applicationSuffixes[random.nextInt(applicationSuffixes.size)]
+        return "com.$publisher.$application"
+    }
 
     fun createKey(file: File) {
         require(!file.exists())
@@ -87,7 +110,19 @@ object ManagerApk {
         val unsigned = File.createTempFile("manager-", ".unsigned", output.parentFile)
         try {
             ZipFile(input).use { source ->
+                val originalLibraries = ManagerNativeLibraries.read(source)
+                val libraryFiles = source.entries().asSequence().filter {
+                    !it.isDirectory && it.name.split('/').let { parts ->
+                        parts.size == 3 && parts[0] == "lib" && parts[2].endsWith(".so")
+                    }
+                }.map { it.name.substringAfterLast('/') }.toSet()
+                val hiddenLibraries = ManagerNativeLibraries.randomNames(random, libraryFiles)
+                val renamedLibraries = originalLibraries.map { (original, name) ->
+                    name to hiddenLibraries.getValue(original)
+                }.toMap()
                 val names = mutableSetOf<String>()
+                val outputNames = mutableSetOf<String>()
+                val repackagedLibraries = mutableSetOf<String>()
                 var total = 0L
                 var iconReplaced = false
                 val counter = CountingStream(unsigned.outputStream())
@@ -96,6 +131,7 @@ object ManagerApk {
                         require(names.add(entry.name) && !entry.name.startsWith("/") &&
                             entry.name.split('/').none { it == ".." })
                         if (entry.isDirectory || entry.name.startsWith("META-INF/")) return@forEach
+                        if (entry.name == ManagerNativeLibraries.METADATA) return@forEach
                         require(entry.size in 0..LIMIT && total + entry.size <= LIMIT)
                         total += entry.size
                         val data = source.getInputStream(entry).use { stream ->
@@ -109,15 +145,24 @@ object ManagerApk {
                             require(stream.read() == -1) { "Invalid APK entry size" }
                             bytes
                         }
-                        val bytes = when (entry.name) {
-                            "AndroidManifest.xml" -> ManagerManifest.rename(
+                        val parts = entry.name.split('/')
+                        val library = if (parts.size == 3 && parts[0] == "lib") parts[2] else null
+                        val renamedLibrary = renamedLibraries[library]
+                        val outputName = if (renamedLibrary != null) {
+                            repackagedLibraries.add(requireNotNull(library))
+                            "lib/${parts[1]}/$renamedLibrary"
+                        } else entry.name
+                        require(outputNames.add(outputName)) { "Duplicate repackaged APK entry" }
+                        val bytes = when {
+                            renamedLibrary != null -> ManagerElfLibraries.rename(data, renamedLibraries)
+                            entry.name == "AndroidManifest.xml" -> ManagerManifest.rename(
                                 data, originalPackage, targetPackage, appearance?.displayName)
-                            "resources.arsc" -> if (appearance != null && originalLabel != null)
+                            entry.name == "resources.arsc" -> if (appearance != null && originalLabel != null)
                                 ManagerResources.renameLabel(data, originalLabel, appearance.displayName) else data
-                            appearance?.iconEntry -> requireNotNull(icon).also { iconReplaced = true }
+                            entry.name == appearance?.iconEntry -> requireNotNull(icon).also { iconReplaced = true }
                             else -> data
                         }
-                        val copied = ZipEntry(entry.name).apply {
+                        val copied = ZipEntry(outputName).apply {
                             time = entry.time
                             if (entry.method == ZipEntry.STORED) {
                                 method = ZipEntry.STORED
@@ -138,7 +183,13 @@ object ManagerApk {
                         target.write(bytes)
                         target.closeEntry()
                     }
+                    require(repackagedLibraries == originalLibraries.values.toSet()) {
+                        "The Manager native library set is incomplete"
+                    }
                     require(icon == null || iconReplaced) { "The Manager icon asset is missing" }
+                    target.putNextEntry(ZipEntry(ManagerNativeLibraries.METADATA))
+                    target.write(ManagerNativeLibraries.encode(hiddenLibraries))
+                    target.closeEntry()
                 }
             }
             val store = keyStore(key)

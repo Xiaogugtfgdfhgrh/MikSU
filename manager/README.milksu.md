@@ -32,7 +32,9 @@ The release pipeline provides this asset and runs the Android build:
 bash tools/build-release.sh manager
 ```
 
-`version.properties` defines the shared Manager, daemon and kernel version.
+`version.properties` defines the release name, kernel version
+(`MILKSU_VERSION_CODE`) and Manager version (`MILKSU_MANAGER_VERSION_CODE`).
+Manager-only releases retain the bundled kernel version and native assets.
 See the [build documentation](../docs/MILKSU_TECHNICAL.md) for prerequisites
 and the complete native asset build sequence.
 

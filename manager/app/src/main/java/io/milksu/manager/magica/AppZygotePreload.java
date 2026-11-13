@@ -6,6 +6,8 @@ import android.util.Log;
 
 import androidx.annotation.NonNull;
 
+import io.milksu.manager.NativeLibraryLoader;
+import io.milksu.manager.data.system.ManagerNativeLibraries;
 import java.io.File;
 
 public class AppZygotePreload implements ZygotePreload {
@@ -15,16 +17,14 @@ public class AppZygotePreload implements ZygotePreload {
 
     @Override
     public void doPreload(@NonNull ApplicationInfo appInfo) {
-        File f = new File(appInfo.nativeLibraryDir, "libksud.so");
-        // The daemon is staged per ABI. When this APK has no daemon for the
-        // device ABI, forking would exec a path that does not exist and the app
-        // zygote would keep a broken child around.
-        if (!f.isFile()) {
-            Log.w(TAG, "no ksud daemon for this ABI: " + f.getAbsolutePath());
-            return;
-        }
         try {
-            System.loadLibrary("kernelsu");
+            File f = NativeLibraryLoader.file(appInfo, ManagerNativeLibraries.DAEMON);
+            // A missing ABI must not leave a broken child in the app zygote.
+            if (!f.isFile()) {
+                Log.w(TAG, "no ksud daemon for this ABI: " + f.getAbsolutePath());
+                return;
+            }
+            NativeLibraryLoader.loadBridge(appInfo);
             Log.d(TAG, "executing magica ...");
             forkDontCareAndExecKsud(f.getAbsolutePath(), appInfo.packageName);
         } catch (Throwable t) {

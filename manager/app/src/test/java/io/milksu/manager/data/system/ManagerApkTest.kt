@@ -10,6 +10,7 @@ import java.security.KeyStore
 import java.security.PrivateKey
 import java.security.Signature
 import java.security.SecureRandom
+import java.util.Random
 
 class ManagerApkTest {
     @Test
@@ -44,35 +45,43 @@ class ManagerApkTest {
     }
 
     @Test
-    fun randomPackagesAreValidDistinctAndHaveNoFixedNamespace() {
-        val packages = List(4096) { ManagerApk.randomPackage() }
-        assertEquals(packages.size, packages.toSet().size)
+    fun randomPackagesUseReadableReverseDomainNamesWithHighDiversity() {
+        val seed = Random(0x4d534849L)
+        val random = object : SecureRandom() {
+            override fun nextInt(bound: Int): Int = seed.nextInt(bound)
+        }
+        val packages = List(4096) { ManagerApk.randomPackage(random) }
+        assertTrue(packages.toSet().size > 4000)
         assertTrue(packages.all(ManagerManifest::validPackage))
         assertTrue(packages.all(ManagerAppearance::isHiddenTextAllowed))
-        assertTrue(packages.map { it.substringBefore('.') }.toSet().size > 120)
+        assertTrue(packages.all { Regex("com\\.[a-z]+\\.[a-z]+").matches(it) })
+        assertTrue(packages.map { it.split('.')[1] }.toSet().size > 900)
+        assertTrue(packages.map { it.substringAfterLast('.') }.toSet().size > 900)
     }
 
     @Test
-    fun forbiddenFragmentsInAnyPartOfRandomPackageAreRetried() {
-        val safe = listOf("abcdefgh", "jklmnopq", "rstvwxyz")
-        val unsafe = listOf(
-            listOf("abcsudef", safe[1], safe[2]),
-            listOf(safe[0], "abcdioef", safe[2]),
-            listOf(safe[0], safe[1], "xmanagerx"),
-        )
-        for (candidate in unsafe) {
-            val alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
-            val draws = (candidate + safe).flatMap { segment ->
-                listOf(segment.first() - 'a', segment.length - 8) +
-                    segment.drop(1).map { alphabet.indexOf(it) }
-            }
-            val scripted = object : SecureRandom() {
-                var consumed = 0
-                override fun nextInt(bound: Int): Int =
-                    draws[consumed++].also { require(it in 0 until bound) }
-            }
-            assertEquals(safe.joinToString("."), ManagerApk.randomPackage(scripted))
-            assertEquals(draws.size, scripted.consumed)
+    fun readableWordsAreCombinedWithoutRandomCharacterSuffixes() {
+        val draws = listOf(4, 2, 16, 16)
+        val scripted = object : SecureRandom() {
+            var consumed = 0
+            override fun nextInt(bound: Int): Int =
+                draws[consumed++].also { require(it in 0 until bound) }
         }
+        assertEquals("com.cedarbrook.quicknotes", ManagerApk.randomPackage(scripted))
+        assertEquals(draws.size, scripted.consumed)
+    }
+
+    @Test
+    fun forbiddenFragmentsAcrossWordBoundariesAreRetried() {
+        assertTrue(ManagerAppearance.isHiddenTextAllowed("atlas"))
+        assertTrue(ManagerAppearance.isHiddenTextAllowed("upland"))
+        val draws = listOf(1, 31, 0, 16, 4, 2, 16, 16)
+        val scripted = object : SecureRandom() {
+            var consumed = 0
+            override fun nextInt(bound: Int): Int =
+                draws[consumed++].also { require(it in 0 until bound) }
+        }
+        assertEquals("com.cedarbrook.quicknotes", ManagerApk.randomPackage(scripted))
+        assertEquals(draws.size, scripted.consumed)
     }
 }

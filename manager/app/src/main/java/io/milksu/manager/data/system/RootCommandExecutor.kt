@@ -4,10 +4,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.topjohnwu.superuser.Shell
 import io.milksu.manager.data.script.ScriptCommand
+import io.milksu.manager.NativeLibraryLoader
 import io.milksu.manager.ksuApp
 import io.milksu.manager.ui.util.getRootShell
 import io.milksu.manager.ui.util.withNewRootShell
-import java.io.File
 
 class RootCommandExecutor(private val isolatedShell: Boolean = false) : CommandExecutor {
     override suspend fun execute(arguments: List<String>): CommandOutput = withContext(Dispatchers.IO) {
@@ -20,7 +20,7 @@ class RootCommandExecutor(private val isolatedShell: Boolean = false) : CommandE
 
     private fun execute(shell: Shell, arguments: List<String>): CommandOutput {
         if (!shell.isRoot) throw BackendException("root_unavailable", "Root access is required")
-        val daemon = File(ksuApp.applicationInfo.nativeLibraryDir, "libksud.so")
+        val daemon = NativeLibraryLoader.file(ksuApp.applicationInfo, ManagerNativeLibraries.DAEMON)
         val command = (listOf(daemon.absolutePath) + arguments).joinToString(" ", transform = ScriptCommand::quote)
         val stdout = mutableListOf<String>()
         val stderr = mutableListOf<String>()

@@ -33,7 +33,7 @@ object Natives {
     const val ROOT_GID = 0
 
     val loadError: LinkageError? = try {
-        System.loadLibrary("kernelsu")
+        NativeLibraryLoader.loadBridge(runCatching { ksuApp.applicationInfo }.getOrNull())
         null
     } catch (error: LinkageError) {
         runCatching {

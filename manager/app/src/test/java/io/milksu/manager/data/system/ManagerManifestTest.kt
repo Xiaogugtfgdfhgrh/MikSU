@@ -39,6 +39,20 @@ class ManagerManifestTest {
     }
 
     @Test
+    fun legacyRandomAndReadableHiddenPackagesCanBothBeRestored() {
+        val values = listOf(source, "$source.fileprovider", "$source.webui",
+            "$source.ui.MainActivity", "$source.magica.AppZygotePreload")
+        for (hidden in listOf("abcdefgh.jklmnopq.rstvwxyz", "com.cedarbrook.quicknotes")) {
+            for (utf8 in listOf(true, false)) {
+                val input = manifest(values, utf8)
+                val renamed = ManagerManifest.rename(input, source, hidden)
+                assertEquals(hidden, strings(renamed).first())
+                assertEquals(values, strings(ManagerManifest.rename(renamed, hidden, source)))
+            }
+        }
+    }
+
+    @Test
     fun malformedChunksAndMissingPackageAreRejected() {
         val input = manifest(listOf(source), true)
         assertThrows(IllegalArgumentException::class.java) {

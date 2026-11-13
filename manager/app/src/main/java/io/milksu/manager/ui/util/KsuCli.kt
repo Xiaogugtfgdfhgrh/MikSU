@@ -18,6 +18,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.parcelize.Parcelize
 import io.milksu.manager.BuildConfig
 import io.milksu.manager.Natives
+import io.milksu.manager.NativeLibraryLoader
 import io.milksu.manager.core.tasks.BootKernelVersion
 import io.milksu.manager.core.tasks.ExtractImage
 import io.milksu.manager.core.tasks.ProbeResult
@@ -25,6 +26,7 @@ import io.milksu.manager.core.utils.DataSourceChannel
 import io.milksu.manager.data.registry.DownloadVerificationException
 import io.milksu.manager.data.registry.RegistryDownloadStore
 import io.milksu.manager.data.registry.copyForInstall
+import io.milksu.manager.data.system.ManagerNativeLibraries
 import io.milksu.manager.ksuApp
 import okhttp3.OkHttpClient
 import org.json.JSONArray
@@ -42,7 +44,7 @@ import java.util.zip.ZipFile
 private const val TAG = "KsuCli"
 
 private fun getKsuDaemonPath(): String {
-    return ksuApp.applicationInfo.nativeLibraryDir + File.separator + "libksud.so"
+    return NativeLibraryLoader.file(ksuApp.applicationInfo, ManagerNativeLibraries.DAEMON).absolutePath
 }
 
 data class FlashResult(val code: Int, val err: String, val showReboot: Boolean) {
@@ -144,7 +146,7 @@ private suspend fun readFeatureValue(args: String): Long? = withContext(Dispatch
 
 fun install() {
     val start = SystemClock.elapsedRealtime()
-    val libadbroot = File(ksuApp.applicationInfo.nativeLibraryDir, "libadbroot.so").absolutePath
+    val libadbroot = NativeLibraryLoader.file(ksuApp.applicationInfo, ManagerNativeLibraries.ADB_ROOT).absolutePath
     val result = execKsud("install --libadbroot $libadbroot --data-path ${ksuApp.applicationInfo.deviceProtectedDataDir}", true)
     Log.w(TAG, "install result: $result, cost: ${SystemClock.elapsedRealtime() - start}ms")
 }
