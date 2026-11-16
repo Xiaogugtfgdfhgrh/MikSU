@@ -12,9 +12,7 @@
 #include "ksu.h"
 #include "logging.h"
 
-extern "C"
-JNIEXPORT jint JNICALL
-Java_io_milksu_manager_NativeBridge_getVersion(JNIEnv *env, jobject) {
+static jint getVersion(JNIEnv *env, jobject) {
     int version = get_version();
     if (version > 0) {
         return version;
@@ -23,21 +21,15 @@ Java_io_milksu_manager_NativeBridge_getVersion(JNIEnv *env, jobject) {
     return legacy_get_info().first;
 }
 
-extern "C"
-JNIEXPORT jint JNICALL
-Java_io_milksu_manager_NativeBridge_getKernelUAPIVersion(JNIEnv *env, jobject) {
+static jint getKernelUAPIVersion(JNIEnv *env, jobject) {
     return get_kernel_uapi_version();
 }
 
-extern "C"
-JNIEXPORT jint JNICALL
-Java_io_milksu_manager_NativeBridge_getManagerUAPIVersion(JNIEnv *env, jobject) {
+static jint getManagerUAPIVersion(JNIEnv *env, jobject) {
     return get_manager_uapi_version();
 }
 
-extern "C"
-JNIEXPORT jint JNICALL
-Java_io_milksu_manager_NativeBridge_getSuperuserCount(JNIEnv *env, jobject) {
+static jint getSuperuserCount(JNIEnv *env, jobject) {
     struct ksu_new_get_allow_list_cmd cmd = {
         .count = 0
     };
@@ -45,51 +37,35 @@ Java_io_milksu_manager_NativeBridge_getSuperuserCount(JNIEnv *env, jobject) {
     return result ? cmd.total_count : 0;
 }
 
-extern "C"
-JNIEXPORT jboolean JNICALL
-Java_io_milksu_manager_NativeBridge_isSafeMode(JNIEnv *env, jclass clazz) {
+static jboolean isSafeMode(JNIEnv *env, jobject) {
     return is_safe_mode();
 }
 
-extern "C"
-JNIEXPORT jboolean JNICALL
-Java_io_milksu_manager_NativeBridge_isLkmMode(JNIEnv *env, jclass clazz) {
+static jboolean isLkmMode(JNIEnv *env, jobject) {
     return is_lkm_mode();
 }
 
-extern "C"
-JNIEXPORT jboolean JNICALL
-Java_io_milksu_manager_NativeBridge_isLkmBundled(JNIEnv *env, jclass clazz) {
+static jboolean isLkmBundled(JNIEnv *env, jobject) {
     return is_lkm_bundled();
 }
 
-extern "C"
-JNIEXPORT jboolean JNICALL
-Java_io_milksu_manager_NativeBridge_isLateLoadMode(JNIEnv *env, jclass clazz) {
+static jboolean isLateLoadMode(JNIEnv *env, jobject) {
     return is_late_load_mode();
 }
 
-extern "C"
-JNIEXPORT jboolean JNICALL
-Java_io_milksu_manager_NativeBridge_isManager(JNIEnv *env, jclass clazz) {
+static jboolean isManager(JNIEnv *env, jobject) {
     return is_manager();
 }
 
-extern "C"
-JNIEXPORT jboolean JNICALL
-Java_io_milksu_manager_NativeBridge_isManagerHideSupported(JNIEnv *, jclass) {
+static jboolean isManagerHideSupported(JNIEnv *, jobject) {
     return is_manager_hide_supported();
 }
 
-extern "C"
-JNIEXPORT jboolean JNICALL
-Java_io_milksu_manager_NativeBridge_verifyManagerAccess(JNIEnv *, jclass) {
+static jboolean verifyManagerAccess(JNIEnv *, jobject) {
     return verify_manager_access();
 }
 
-extern "C"
-JNIEXPORT jboolean JNICALL
-Java_io_milksu_manager_NativeBridge_isPrBuild(JNIEnv *env, jclass clazz) {
+static jboolean isPrBuild(JNIEnv *env, jobject) {
     return is_pr_build();
 }
 
@@ -150,9 +126,7 @@ static void fillArrayWithList(JNIEnv *env, jobject list, int *data, int count) {
     }
 }
 
-extern "C"
-JNIEXPORT jobject JNICALL
-Java_io_milksu_manager_NativeBridge_getAppProfile(JNIEnv *env, jobject, jstring pkg, jint uid) {
+static jobject getAppProfile(JNIEnv *env, jobject, jstring pkg, jint uid) {
     if (env->GetStringLength(pkg) > KSU_MAX_PACKAGE_NAME) {
         return nullptr;
     }
@@ -248,9 +222,7 @@ Java_io_milksu_manager_NativeBridge_getAppProfile(JNIEnv *env, jobject, jstring 
     return obj;
 }
 
-extern "C"
-JNIEXPORT jboolean JNICALL
-Java_io_milksu_manager_NativeBridge_setAppProfile(JNIEnv *env, jobject clazz, jobject profile) {
+static jboolean setAppProfile(JNIEnv *env, jobject, jobject profile) {
     auto cls = env->FindClass("io/milksu/manager/Natives$Profile");
 
     auto keyField = env->GetFieldID(cls, "name", "Ljava/lang/String;");
@@ -337,49 +309,33 @@ Java_io_milksu_manager_NativeBridge_setAppProfile(JNIEnv *env, jobject clazz, jo
 
     return set_app_profile(&p);
 }
-extern "C"
-JNIEXPORT jboolean JNICALL
-Java_io_milksu_manager_NativeBridge_uidShouldUmount(JNIEnv *env, jobject thiz, jint uid) {
+static jboolean uidShouldUmount(JNIEnv *env, jobject, jint uid) {
     return uid_should_umount(uid);
 }
-extern "C"
-JNIEXPORT jboolean JNICALL
-Java_io_milksu_manager_NativeBridge_isSuEnabled(JNIEnv *env, jobject thiz) {
+static jboolean isSuEnabled(JNIEnv *env, jobject) {
     return is_su_enabled();
 }
-extern "C"
-JNIEXPORT jboolean JNICALL
-Java_io_milksu_manager_NativeBridge_setSuEnabled(JNIEnv *env, jobject thiz, jboolean enabled) {
+static jboolean setSuEnabled(JNIEnv *env, jobject, jboolean enabled) {
     return set_su_enabled(enabled);
 }
 
-extern "C"
-JNIEXPORT jboolean JNICALL
-Java_io_milksu_manager_NativeBridge_isKernelUmountEnabled(JNIEnv *env, jobject thiz) {
+static jboolean isKernelUmountEnabled(JNIEnv *env, jobject) {
     return is_kernel_umount_enabled();
 }
 
-extern "C"
-JNIEXPORT jboolean JNICALL
-Java_io_milksu_manager_NativeBridge_setKernelUmountEnabled(JNIEnv *env, jobject thiz, jboolean enabled) {
+static jboolean setKernelUmountEnabled(JNIEnv *env, jobject, jboolean enabled) {
     return set_kernel_umount_enabled(enabled);
 }
 
-extern "C"
-JNIEXPORT jboolean JNICALL
-Java_io_milksu_manager_NativeBridge_isSelinuxHideEnabled(JNIEnv *env, jobject thiz) {
+static jboolean isSelinuxHideEnabled(JNIEnv *env, jobject) {
     return is_selinux_hide_enabled();
 }
 
-extern "C"
-JNIEXPORT jint JNICALL
-Java_io_milksu_manager_NativeBridge_setSelinuxHideEnabled(JNIEnv *env, jobject thiz, jboolean enabled) {
+static jint setSelinuxHideEnabled(JNIEnv *env, jobject, jboolean enabled) {
     return set_selinux_hide_enabled(enabled);
 }
 
-extern "C"
-JNIEXPORT jstring JNICALL
-Java_io_milksu_manager_NativeBridge_getUserName(JNIEnv *env, jobject thiz, jint uid) {
+static jstring getUserName(JNIEnv *env, jobject, jint uid) {
     struct passwd *pw = getpwuid((uid_t) uid);
     if (pw && pw->pw_name && pw->pw_name[0] != '\0') {
         return env->NewStringUTF(pw->pw_name);
@@ -422,14 +378,53 @@ int fork_dont_care_and_exec_ksud(const char *path, const char *pkg) {
     _exit(1);
 }
 
-extern "C"
-JNIEXPORT void JNICALL
-Java_io_milksu_manager_magica_AppZygotePreload_forkDontCareAndExecKsud(JNIEnv *env, jclass clazz,
-                                                                        jstring ksud_path, jstring pkg_name) {
+static void forkDontCareAndExecKsud(JNIEnv *env, jclass, jstring ksud_path, jstring pkg_name) {
     auto path = env->GetStringUTFChars(ksud_path, nullptr);
     auto pkg = env->GetStringUTFChars(pkg_name, nullptr);
     LOGD("executing magica %s (pkg %s)", path, pkg);
     fork_dont_care_and_exec_ksud(path, pkg);
     env->ReleaseStringUTFChars(ksud_path, path);
     env->ReleaseStringUTFChars(pkg_name, pkg);
+}
+
+extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *) {
+    JNIEnv *env = nullptr;
+    if (vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) != JNI_OK) {
+        return JNI_ERR;
+    }
+    auto bridge = env->FindClass("io/milksu/manager/NativeBridge");
+    if (bridge == nullptr) {
+        return JNI_ERR;
+    }
+#define NATIVE_METHOD(name, signature) {#name, signature, reinterpret_cast<void *>(name)}
+    const JNINativeMethod methods[] = {
+        NATIVE_METHOD(getVersion, "()I"),
+        NATIVE_METHOD(getKernelUAPIVersion, "()I"),
+        NATIVE_METHOD(getManagerUAPIVersion, "()I"),
+        NATIVE_METHOD(getSuperuserCount, "()I"),
+        NATIVE_METHOD(isSafeMode, "()Z"),
+        NATIVE_METHOD(isLkmMode, "()Z"),
+        NATIVE_METHOD(isLkmBundled, "()Z"),
+        NATIVE_METHOD(isLateLoadMode, "()Z"),
+        NATIVE_METHOD(isManager, "()Z"),
+        NATIVE_METHOD(isManagerHideSupported, "()Z"),
+        NATIVE_METHOD(verifyManagerAccess, "()Z"),
+        NATIVE_METHOD(isPrBuild, "()Z"),
+        NATIVE_METHOD(getAppProfile, "(Ljava/lang/String;I)Lio/milksu/manager/Natives$Profile;"),
+        NATIVE_METHOD(setAppProfile, "(Lio/milksu/manager/Natives$Profile;)Z"),
+        NATIVE_METHOD(uidShouldUmount, "(I)Z"),
+        NATIVE_METHOD(isSuEnabled, "()Z"),
+        NATIVE_METHOD(setSuEnabled, "(Z)Z"),
+        NATIVE_METHOD(isKernelUmountEnabled, "()Z"),
+        NATIVE_METHOD(setKernelUmountEnabled, "(Z)Z"),
+        NATIVE_METHOD(isSelinuxHideEnabled, "()Z"),
+        NATIVE_METHOD(setSelinuxHideEnabled, "(Z)I"),
+        NATIVE_METHOD(getUserName, "(I)Ljava/lang/String;"),
+        NATIVE_METHOD(forkDontCareAndExecKsud, "(Ljava/lang/String;Ljava/lang/String;)V"),
+    };
+#undef NATIVE_METHOD
+    const auto count = static_cast<jint>(sizeof(methods) / sizeof(methods[0]));
+    const auto result = env->RegisterNatives(bridge, methods, count);
+    env->DeleteLocalRef(bridge);
+    return result == JNI_OK ? JNI_VERSION_1_6 : JNI_ERR;
 }

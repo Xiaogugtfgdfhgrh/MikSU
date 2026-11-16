@@ -111,12 +111,14 @@ object ManagerApk {
         try {
             ZipFile(input).use { source ->
                 val originalLibraries = ManagerNativeLibraries.read(source)
+                ManagerNativeLibraries.verifyArchive(source, originalLibraries)
                 val libraryFiles = source.entries().asSequence().filter {
                     !it.isDirectory && it.name.split('/').let { parts ->
                         parts.size == 3 && parts[0] == "lib" && parts[2].endsWith(".so")
                     }
                 }.map { it.name.substringAfterLast('/') }.toSet()
-                val hiddenLibraries = ManagerNativeLibraries.randomNames(random, libraryFiles)
+                val layout = ManagerNativeLibraries.randomLayout(random, libraryFiles)
+                val hiddenLibraries = layout.names
                 val renamedLibraries = originalLibraries.map { (original, name) ->
                     name to hiddenLibraries.getValue(original)
                 }.toMap()
@@ -127,11 +129,13 @@ object ManagerApk {
                 var iconReplaced = false
                 val counter = CountingStream(unsigned.outputStream())
                 ZipOutputStream(counter).use { target ->
+                    // The signed ZIP comment carries entropy only, without a role/name manifest.
+                    target.setComment(layout.seed)
                     source.entries().asSequence().forEach { entry ->
                         require(names.add(entry.name) && !entry.name.startsWith("/") &&
                             entry.name.split('/').none { it == ".." })
                         if (entry.isDirectory || entry.name.startsWith("META-INF/")) return@forEach
-                        if (entry.name == ManagerNativeLibraries.METADATA) return@forEach
+                        if (entry.name == ManagerNativeLibraries.LEGACY_METADATA) return@forEach
                         require(entry.size in 0..LIMIT && total + entry.size <= LIMIT)
                         total += entry.size
                         val data = source.getInputStream(entry).use { stream ->
@@ -187,9 +191,6 @@ object ManagerApk {
                         "The Manager native library set is incomplete"
                     }
                     require(icon == null || iconReplaced) { "The Manager icon asset is missing" }
-                    target.putNextEntry(ZipEntry(ManagerNativeLibraries.METADATA))
-                    target.write(ManagerNativeLibraries.encode(hiddenLibraries))
-                    target.closeEntry()
                 }
             }
             val store = keyStore(key)
@@ -202,6 +203,9 @@ object ManagerApk {
                 .setV3SigningEnabled(false).setV4SigningEnabled(false)
                 .setOtherSignersSignaturesPreserved(false).build().sign()
             require(certificateHash(verifiedSigner(output)) == certificateHash(certificate))
+            ZipFile(output).use { signed ->
+                ManagerNativeLibraries.verifyArchive(signed, ManagerNativeLibraries.read(signed))
+            }
         } catch (error: Throwable) {
             output.delete()
             throw error

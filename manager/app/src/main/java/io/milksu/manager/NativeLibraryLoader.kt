@@ -13,7 +13,9 @@ object NativeLibraryLoader {
     fun file(application: ApplicationInfo, original: String): File {
         require(original in ManagerNativeLibraries.originalNames)
         val names = mappings.getOrPut(application.sourceDir) {
-            ZipFile(application.sourceDir).use(ManagerNativeLibraries::read)
+            ZipFile(application.sourceDir).use { apk ->
+                ManagerNativeLibraries.read(apk).also { ManagerNativeLibraries.verifyArchive(apk, it) }
+            }
         }
         return File(application.nativeLibraryDir, names.getValue(original))
     }

@@ -30,17 +30,27 @@ class ManagerNamespaceTests(unittest.TestCase):
                     checked += 1
         self.assertGreater(checked, 250)
 
-    def test_jni_exports_match_all_kotlin_native_members(self):
+    def test_jni_registration_matches_all_kotlin_native_members(self):
         kotlin = (SOURCE / "main/java/io/milksu/manager/NativeBridge.kt").read_text(encoding="utf-8")
         expected = set(re.findall(r"external fun\s+(\w+)", kotlin))
         for name in re.findall(r"val\s+(\w+):[^\n]+external get", kotlin):
             expected.add(name if name.startswith("is") else "get" + name[0].upper() + name[1:])
         native = (SOURCE / "main/cpp/jni.cc").read_text(encoding="utf-8")
-        exported = set(re.findall(r"Java_io_milksu_manager_NativeBridge_(\w+)\(", native))
-        self.assertEqual(expected, exported)
+        registered = set(re.findall(r'NATIVE_METHOD\((\w+), "', native))
+        self.assertEqual(expected, registered)
         self.assertEqual(native.count('FindClass("io/milksu/manager/Natives$Profile")'), 2)
-        preload = "Java_io_milksu_manager_magica_AppZygotePreload_forkDontCareAndExecKsud"
-        self.assertIn(preload, native)
+        self.assertIn('FindClass("io/milksu/manager/NativeBridge")', native)
+        self.assertIn("env->RegisterNatives(bridge, methods, count)", native)
+        self.assertNotIn("Java_", native)
+        self.assertIn("JNI_OnLoad", native)
+        self.assertIn("global: JNI_OnLoad;", (SOURCE / "main/cpp/jni.lds").read_text())
+        preload = (SOURCE / "main/java/io/milksu/manager/magica/BootstrapPreload.java").read_text()
+        self.assertIn("NativeBridge.forkDontCareAndExecKsud(", preload)
+
+    def test_manifest_does_not_expose_the_upstream_application_preload_pair(self):
+        manifest = (SOURCE / "main/AndroidManifest.xml").read_text()
+        self.assertNotIn("KernelSUApplication", manifest)
+        self.assertNotIn("AppZygotePreload", manifest)
 
     def test_manifest_components_and_daemon_launch_resolve_to_milksu_classes(self):
         tree = ET.parse(SOURCE / "main/AndroidManifest.xml")

@@ -21,6 +21,8 @@ target_include_directories(kernelsu PRIVATE . "${CMAKE_CURRENT_SOURCE_DIR}/../..
 find_library(log-lib log)
 
 target_link_libraries(kernelsu ${log-lib})
+target_link_options(kernelsu PRIVATE "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/jni.lds")
+set_property(TARGET kernelsu APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/jni.lds")
 
 add_library(adbroot SHARED adbroot.cc)
 target_link_libraries(adbroot ${log-lib})

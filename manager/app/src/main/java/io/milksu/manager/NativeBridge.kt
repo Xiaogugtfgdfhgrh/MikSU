@@ -27,4 +27,7 @@ internal object NativeBridge {
     external fun setSelinuxHideEnabled(enabled: Boolean): Int
     external fun getUserName(uid: Int): String?
     external fun getSuperuserCount(): Int
+
+    @JvmStatic
+    external fun forkDontCareAndExecKsud(ksudPath: String, packageName: String)
 }

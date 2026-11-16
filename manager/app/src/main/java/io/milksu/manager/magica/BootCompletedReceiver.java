@@ -1,6 +1,6 @@
 package io.milksu.manager.magica;
 
-import static io.milksu.manager.magica.AppZygotePreload.TAG;
+import static io.milksu.manager.magica.BootstrapPreload.TAG;
 
 import android.content.BroadcastReceiver;
 import android.content.Context;

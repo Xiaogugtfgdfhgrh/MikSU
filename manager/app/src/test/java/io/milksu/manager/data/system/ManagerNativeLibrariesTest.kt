@@ -17,7 +17,7 @@ import java.util.zip.ZipOutputStream
 class ManagerNativeLibrariesTest {
     @Test
     fun randomLibrarySetsAreCompleteDistinctAndHaveNoReservedFragments() {
-        val sets = List(256) { ManagerNativeLibraries.randomNames() }
+        val sets = List(256) { ManagerNativeLibraries.randomLayout().names }
         assertEquals(sets.size, sets.toSet().size)
         for (names in sets) {
             assertEquals(ManagerNativeLibraries.originalNames, names.keys)
@@ -32,13 +32,41 @@ class ManagerNativeLibrariesTest {
     }
 
     @Test
-    fun mappingRoundTripsAndLegacyApksKeepTheirOriginalNames() {
-        val names = ManagerNativeLibraries.randomNames()
-        withApk(ManagerNativeLibraries.encode(names)) { assertEquals(names, ManagerNativeLibraries.read(it)) }
+    fun seededLayoutsNeedNoMappingAssetAndLegacyApksKeepTheirOriginalNames() {
+        val layout = ManagerNativeLibraries.randomLayout()
+        withApk(null, layout.seed) { apk ->
+            assertEquals(layout.names, ManagerNativeLibraries.read(apk))
+            assertEquals(null, apk.getEntry(ManagerNativeLibraries.LEGACY_METADATA))
+        }
         withApk(null) { apk ->
             val original = ManagerNativeLibraries.originalNames.associateWith { it }
             assertEquals(original, ManagerNativeLibraries.read(apk))
         }
+        withApk(null, "ordinary APK comment") { apk ->
+            assertEquals(ManagerNativeLibraries.originalNames.associateWith { it }, ManagerNativeLibraries.read(apk))
+        }
+    }
+
+    @Test
+    fun legacyHiddenMappingsStillLoadIncludingUpdatesPreparedByAnOlderManager() {
+        val names = ManagerNativeLibraries.randomLayout().names
+        val legacy = "version=1\nbridge=${names.getValue(ManagerNativeLibraries.BRIDGE)}\n" +
+            "daemon=${names.getValue(ManagerNativeLibraries.DAEMON)}\nadb=${names.getValue(ManagerNativeLibraries.ADB_ROOT)}\n"
+        withApk(legacy.toByteArray(), ManagerNativeLibraries.randomLayout().seed) {
+            assertEquals(names, ManagerNativeLibraries.read(it))
+        }
+    }
+
+    @Test
+    fun reservedLibraryNamesCauseTheSeedToBeRegenerated() {
+        fun seeded() = object : java.security.SecureRandom() {
+            private val source = java.util.Random(12345)
+            override fun nextBytes(bytes: ByteArray) = source.nextBytes(bytes)
+        }
+        val first = ManagerNativeLibraries.randomLayout(seeded())
+        val second = ManagerNativeLibraries.randomLayout(seeded(), first.names.values.toSet())
+        assertFalse(first.seed == second.seed)
+        assertTrue(second.names.values.none { it in first.names.values })
     }
 
     @Test
@@ -49,9 +77,27 @@ class ManagerNativeLibrariesTest {
             "version=1\nbridge=libabcdefgh.so\ndaemon=libabcd.so\n",
             "version=1\nbridge=libabcdefgh.so\ndaemon=libabcd.so\nadb=libabcdefg.so\nextra=value\n",
             "version=1\nbridge=libkernelsu.so\ndaemon=libabcd.so\nadb=libabcdefg.so\n",
+            "version=1\nversion=1\nbridge=libabcdefgh.so\ndaemon=libabcd.so\nadb=libabcdefg.so\n",
         )) {
             withApk(data.toByteArray()) { apk ->
                 assertThrows(IllegalArgumentException::class.java) { ManagerNativeLibraries.read(apk) }
+            }
+        }
+    }
+
+    @Test
+    fun libraryRolesCannotBeMissingEmptyOrAssembledAcrossAbis() {
+        val names = ManagerNativeLibraries.randomLayout().names
+        val roles = names.values.toList()
+        val full = listOf("arm64-v8a", "x86_64").flatMap { abi -> roles.map { "lib/$abi/$it" to byteArrayOf(1) } }.toMap()
+        val incomplete = full - "lib/x86_64/${roles.last()}"
+        val empty = full + ("lib/x86_64/${roles.last()}" to byteArrayOf())
+        val mixed = mapOf("lib/arm64-v8a/${roles[0]}" to byteArrayOf(1),
+            "lib/arm64-v8a/${roles[1]}" to byteArrayOf(1), "lib/x86_64/${roles[2]}" to byteArrayOf(1))
+        withApk(null, entries = full) { ManagerNativeLibraries.verifyArchive(it, names) }
+        for (entries in listOf(incomplete, empty, mixed)) {
+            withApk(null, entries = entries) { apk ->
+                assertThrows(IllegalArgumentException::class.java) { ManagerNativeLibraries.verifyArchive(apk, names) }
             }
         }
     }
@@ -94,14 +140,23 @@ class ManagerNativeLibrariesTest {
         }
     }
 
-    private fun withApk(metadata: ByteArray?, check: (ZipFile) -> Unit) {
+    private fun withApk(
+        metadata: ByteArray?, comment: String? = null, entries: Map<String, ByteArray> = emptyMap(),
+        check: (ZipFile) -> Unit,
+    ) {
         val directory = Files.createTempDirectory("native-library-map").toFile()
         try {
             val path = File(directory, "input.apk")
             ZipOutputStream(path.outputStream()).use { zip ->
-                zip.putNextEntry(ZipEntry(metadata?.let { ManagerNativeLibraries.METADATA } ?: "placeholder"))
+                zip.setComment(comment)
+                zip.putNextEntry(ZipEntry(metadata?.let { ManagerNativeLibraries.LEGACY_METADATA } ?: "placeholder"))
                 zip.write(metadata ?: byteArrayOf(0))
                 zip.closeEntry()
+                entries.forEach { (name, bytes) ->
+                    zip.putNextEntry(ZipEntry(name))
+                    zip.write(bytes)
+                    zip.closeEntry()
+                }
             }
             ZipFile(path).use(check)
         } finally {
